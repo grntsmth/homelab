@@ -1,6 +1,6 @@
 # homelab
 
-Multi-node k3s homelab on Oracle Cloud Free Tier (ARM) with a Windows GPU node joined over Tailscale. Demonstrates IaC, observability, secure ingress, and backup discipline at small scale the patterns I'm practicing as I transition from a previous career into infrastructure engineering.
+Multi-node k3s homelab on Oracle Cloud Free Tier (ARM) with a Windows GPU node joined over Tailscale. Demonstrates IaC, observability, secure ingress, and backup discipline at small scale.
 
 ## Architecture
 
