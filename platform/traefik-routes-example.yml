@@ -1,0 +1,111 @@
+# =============================================================================
+# Traefik IngressRoutes — example
+# Routes external HTTPS traffic to monitoring services on a worker node.
+#
+# Pattern: Traefik CRD IngressRoutes cannot route cross-namespace, so we
+# create Service+Endpoints in kube-system that point to NodePorts on the
+# worker node's internal IP. Traefik then routes to these "external"
+# services as if they lived in its own namespace.
+#
+# Replace `your-domain.example.com` with your actual hostname.
+# Replace `10.0.0.x` with the internal IP of the worker node hosting
+# the Prometheus + Grafana pods.
+# =============================================================================
+
+# --- External Service: Grafana (pod on worker node, NodePort 30300) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-external
+  namespace: kube-system
+spec:
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: grafana-external
+  namespace: kube-system
+subsets:
+  - addresses:
+      - ip: 10.0.0.x
+    ports:
+      - port: 30300
+
+---
+# --- External Service: Prometheus (pod on worker node, NodePort 30090) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-external
+  namespace: kube-system
+spec:
+  ports:
+    - port: 9090
+      targetPort: 9090
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: prometheus-external
+  namespace: kube-system
+subsets:
+  - addresses:
+      - ip: 10.0.0.x
+    ports:
+      - port: 30090
+
+---
+# --- Middleware: Basic Auth for Prometheus ---
+# Grafana has its own login; Prometheus does not, so gate it with basic auth.
+# Create the secret separately (kubectl create secret generic prometheus-auth-secret ...).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: prometheus-auth
+  namespace: kube-system
+spec:
+  basicAuth:
+    secret: prometheus-auth-secret
+
+---
+# --- IngressRoute: Grafana ---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: grafana
+  namespace: kube-system
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`your-domain.example.com`) && PathPrefix(`/grafana`)
+      kind: Rule
+      services:
+        - name: grafana-external
+          port: 3000
+  tls:
+    certResolver: letsencrypt
+
+---
+# --- IngressRoute: Prometheus ---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: prometheus
+  namespace: kube-system
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`your-domain.example.com`) && PathPrefix(`/prometheus`)
+      kind: Rule
+      middlewares:
+        - name: prometheus-auth
+      services:
+        - name: prometheus-external
+          port: 9090
+  tls:
+    certResolver: letsencrypt

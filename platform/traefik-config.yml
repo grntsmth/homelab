@@ -1,0 +1,35 @@
+# =============================================================================
+# Traefik HelmChartConfig — homelab ingress
+# Overrides the default k3s Traefik to:
+#   - Listen on ports 80 (HTTP) and 443 (HTTPS)
+#   - Auto-issue TLS certs via Let's Encrypt (ACME)
+#   - Redirect all HTTP traffic to HTTPS
+# =============================================================================
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    ports:
+      web:
+        exposedPort: 80
+        redirections:
+          entryPoint:
+            to: websecure
+            scheme: https
+      websecure:
+        exposedPort: 443
+    # Persistent storage for ACME certs
+    persistence:
+      enabled: true
+      size: 128Mi
+      path: /data
+    # Let's Encrypt via CLI args (Traefik Helm v39 method)
+    additionalArguments:
+      - "--certificatesresolvers.letsencrypt.acme.email=acme@your-domain.example.com"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--entrypoints.web.http.redirections.entrypoint.to=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"

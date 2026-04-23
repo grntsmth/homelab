@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+#
+# Get these from the OCI console under Identity > Users > (your user) >
+# API Keys, and Identity > Tenancy Details.
+
+tenancy_ocid     = "ocid1.tenancy.oc1..<REDACTED>"
+user_ocid        = "ocid1.user.oc1..<REDACTED>"
+fingerprint      = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+private_key_path = "~/.oci/oci_api_key.pem"
+region           = "us-ashburn-1"
+
+compartment_ocid    = "ocid1.tenancy.oc1..<REDACTED>"
+availability_domain = "XxXx:US-ASHBURN-AD-1"
+
+# OCID of an Oracle Linux 9 aarch64 image in your region.
+# Find via: oci compute image list --compartment-id <id> --operating-system "Oracle Linux" --shape VM.Standard.A1.Flex
+instance_image_ocid = "ocid1.image.oc1.iad.<REDACTED>"
+
+# SSH public keys authorized for the opc user on each instance.
+ssh_public_key             = "ssh-ed25519 AAAA... you@host"
+star_garden_ssh_public_key = "ssh-ed25519 AAAA... you@host"

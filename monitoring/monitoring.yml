@@ -1,0 +1,581 @@
+# =============================================================================
+# Monitoring Stack — "The Watchtower"
+# Deployed on star-garden worker node (role=watchtower)
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+
+---
+# =============================================================================
+# Prometheus Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ['alertmanager:9093']
+
+    rule_files:
+      - '/etc/prometheus/rules/*.yml'
+
+    scrape_configs:
+      - job_name: 'prometheus'
+        metrics_path: /prometheus/metrics
+        static_configs:
+          - targets: ['localhost:9090']
+
+      - job_name: 'node-high-palace'
+        static_configs:
+          - targets: ['100.92.211.3:9100']
+            labels:
+              instance: 'high-palace'
+
+      - job_name: 'node-star-garden'
+        static_configs:
+          - targets: ['100.123.222.55:9100']
+            labels:
+              instance: 'star-garden'
+
+      # TERMINAL — Windows workstation via Tailscale
+      - job_name: 'terminal-windows'
+        static_configs:
+          - targets: ['100.93.245.19:9182']
+            labels:
+              instance: 'terminal'
+
+      - job_name: 'terminal-gpu'
+        static_configs:
+          - targets: ['100.93.245.19:9835']
+            labels:
+              instance: 'terminal'
+        scrape_interval: 15s
+
+      - job_name: 'kube-state-metrics'
+        static_configs:
+          - targets: ['100.123.222.55:30082']
+        scrape_interval: 30s
+
+      - job_name: 'kubelet-cadvisor-hp'
+        scheme: https
+        tls_config:
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        metrics_path: /metrics/cadvisor
+        static_configs:
+          - targets: ['100.92.211.3:10250']
+            labels:
+              node: 'high-palace'
+        scrape_interval: 30s
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'container_(memory_working_set_bytes|cpu_usage_seconds_total|memory_rss|network_.*)'
+            action: keep
+
+      - job_name: 'kubelet-cadvisor-sg'
+        scheme: https
+        tls_config:
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        metrics_path: /metrics/cadvisor
+        static_configs:
+          - targets: ['100.123.222.55:10250']
+            labels:
+              node: 'star-garden'
+        scrape_interval: 30s
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'container_(memory_working_set_bytes|cpu_usage_seconds_total|memory_rss|network_.*)'
+            action: keep
+
+  alerts.yml: |
+    groups:
+      - name: host-health
+        rules:
+          - alert: HighCPUUsage
+            expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High CPU usage on {{ $labels.instance }}"
+              description: "CPU usage is {{ $value | printf \"%.1f\" }}% (threshold: 90%)."
+
+          - alert: HighMemoryUsage
+            expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High memory usage on {{ $labels.instance }}"
+              description: "Memory usage is {{ $value | printf \"%.1f\" }}% (threshold: 90%)."
+
+          - alert: DiskSpaceLow
+            expr: (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 > 85
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Disk space low on {{ $labels.instance }}"
+              description: "Root filesystem is {{ $value | printf \"%.1f\" }}% full (threshold: 85%)."
+
+          - alert: NodeExporterDown
+            expr: up{job=~"node-.*"} == 0
+            for: 3m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Node exporter is down on {{ $labels.instance }}"
+              description: "Cannot scrape host metrics."
+
+---
+# =============================================================================
+# Prometheus RBAC — ServiceAccount for kubelet/cadvisor scraping
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/metrics", "nodes/proxy"]
+    verbs: ["get", "list"]
+  - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring
+
+---
+# =============================================================================
+# Prometheus Deployment — pinned to star-garden
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  namespace: monitoring
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      automountServiceAccountToken: true
+      nodeSelector:
+        role: watchtower
+      hostNetwork: true
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - 169.254.169.254
+          - 8.8.8.8
+          - 1.1.1.1
+      securityContext:
+        fsGroup: 65534
+        runAsUser: 65534
+        runAsNonRoot: true
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.11.0
+          args:
+            - '--config.file=/etc/prometheus/prometheus.yml'
+            - '--storage.tsdb.retention.time=30d'
+            - '--web.external-url=/prometheus/'
+            - '--web.route-prefix=/prometheus/'
+          ports:
+            - containerPort: 9090
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+            - name: config
+              mountPath: /etc/prometheus/rules/alerts.yml
+              subPath: alerts.yml
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: prometheus-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  type: NodePort
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+      nodePort: 30090
+
+---
+# =============================================================================
+# Grafana
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: monitoring
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      nodeSelector:
+        role: watchtower
+      hostNetwork: true
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - 169.254.169.254
+          - 8.8.8.8
+          - 1.1.1.1
+      securityContext:
+        fsGroup: 472
+        runAsUser: 472
+        runAsNonRoot: true
+      containers:
+        - name: grafana
+          image: grafana/grafana:12.4.2
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SERVER_ROOT_URL
+              value: "https://your-domain.example.com/grafana/"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "true"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: password
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grafana-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  type: NodePort
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30300
+
+---
+# =============================================================================
+# AlertManager + Discord Webhook
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: discord
+      group_by: ['alertname', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        - match:
+            severity: critical
+          receiver: discord
+          repeat_interval: 1h
+    receivers:
+      - name: discord
+        webhook_configs:
+          - url: 'http://localhost:9097'
+            send_resolved: true
+
+  discord-webhook.py: |
+    #!/usr/bin/env python3
+    """Translates Prometheus Alertmanager webhooks into Discord embeds."""
+    import json, sys, os
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from urllib.request import Request, urlopen
+
+    DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
+    COLORS = {"critical": 14177041, "warning": 16760576, "info": 3447003}
+    RESOLVED_COLOR = 3066993
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            embeds = []
+            for alert in body.get("alerts", []):
+                status = alert.get("status", "firing")
+                severity = alert["labels"].get("severity", "info")
+                color = RESOLVED_COLOR if status == "resolved" else COLORS.get(severity, 3447003)
+                title = f"{'RESOLVED' if status == 'resolved' else status.upper()}: {alert['labels'].get('alertname', 'Unknown')}"
+                desc = alert.get("annotations", {}).get("description", "")
+                summary = alert.get("annotations", {}).get("summary", "")
+                embeds.append({
+                    "title": title,
+                    "description": f"**{summary}**\n{desc}" if summary else desc,
+                    "color": color,
+                    "footer": {"text": f"Severity: {severity}"},
+                })
+            if embeds:
+                payload = json.dumps({"embeds": embeds[:10]}).encode()
+                req = Request(DISCORD_WEBHOOK, data=payload, headers={"Content-Type": "application/json", "User-Agent": "Homelab-Alertmanager/1.0"})
+                urlopen(req)
+            self.send_response(200)
+            self.end_headers()
+        def log_message(self, fmt, *args):
+            print(f"[webhook] {fmt % args}", flush=True)
+
+    if __name__ == "__main__":
+        print(f"Discord webhook relay listening on :9097", flush=True)
+        HTTPServer(("0.0.0.0", 9097), Handler).serve_forever()
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: monitoring
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      nodeSelector:
+        role: watchtower
+      hostNetwork: true
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - 169.254.169.254
+          - 8.8.8.8
+          - 1.1.1.1
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.31.1
+          args:
+            - '--config.file=/etc/alertmanager/alertmanager.yml'
+          ports:
+            - containerPort: 9093
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager/alertmanager.yml
+              subPath: alertmanager.yml
+        - name: discord-webhook
+          image: python:3.12-slim
+          command: ["python3", "/app/discord-webhook.py"]
+          ports:
+            - containerPort: 9097
+          env:
+            - name: DISCORD_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: alertmanager-discord
+                  key: webhook-url
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /app/discord-webhook.py
+              subPath: discord-webhook.py
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+spec:
+  selector:
+    app: alertmanager
+  ports:
+    - port: 9093
+      targetPort: 9093
+
+---
+# =============================================================================
+# Node Exporter — DaemonSet on ALL nodes
+# =============================================================================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  template:
+    metadata:
+      labels:
+        app: node-exporter
+    spec:
+      hostPID: true
+      hostNetwork: true
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: node-exporter
+          image: prom/node-exporter:v1.10.2
+          args:
+            - '--path.procfs=/host/proc'
+            - '--path.sysfs=/host/sys'
+            - '--path.rootfs=/host/root'
+          ports:
+            - containerPort: 9100
+              hostPort: 9100
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+            - name: root
+              mountPath: /host/root
+              mountPropagation: HostToContainer
+              readOnly: true
+      volumes:
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: root
+          hostPath:
+            path: /
