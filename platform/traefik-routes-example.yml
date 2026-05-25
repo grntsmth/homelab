@@ -8,7 +8,7 @@
 # services as if they lived in its own namespace.
 #
 # Replace `your-domain.example.com` with your actual hostname.
-# Replace `10.0.0.x` with the internal IP of the worker node hosting
+# Replace `10.0.0.X` with the internal IP of the worker node hosting
 # the Prometheus + Grafana pods.
 # =============================================================================
 
@@ -30,7 +30,7 @@ metadata:
   namespace: kube-system
 subsets:
   - addresses:
-      - ip: 10.0.0.x
+      - ip: 10.0.0.X
     ports:
       - port: 30300
 
@@ -53,7 +53,7 @@ metadata:
   namespace: kube-system
 subsets:
   - addresses:
-      - ip: 10.0.0.x
+      - ip: 10.0.0.X
     ports:
       - port: 30090
 

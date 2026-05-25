@@ -19,15 +19,15 @@
 set -euo pipefail
 
 # --- Fill these in from OCI Console ---
-VCN_OCID="ocid1.vcn.oc1.iad.REDACTED"
-SUBNET_OCID="ocid1.subnet.oc1.iad.REDACTED"
-IGW_OCID="ocid1.internetgateway.oc1.iad.REDACTED"
-RT_OCID="ocid1.routetable.oc1.iad.REDACTED"
-SL_OCID="ocid1.securitylist.oc1.iad.REDACTED"
+VCN_OCID="ocid1.vcn.oc1.<region>.<REDACTED>"
+SUBNET_OCID="ocid1.subnet.oc1.<region>.<REDACTED>"
+IGW_OCID="ocid1.internetgateway.oc1.<region>.<REDACTED>"
+RT_OCID="ocid1.routetable.oc1.<region>.<REDACTED>"
+SL_OCID="ocid1.securitylist.oc1.<region>.<REDACTED>"
 
 # Instance OCIDs
-HIGH_PALACE_OCID="ocid1.instance.oc1.iad.REDACTED"
-STAR_GARDEN_OCID="ocid1.instance.oc1.iad.REDACTED"
+HIGH_PALACE_OCID="ocid1.instance.oc1.<region>.<REDACTED>"
+STAR_GARDEN_OCID="ocid1.instance.oc1.<region>.<REDACTED>"
 
 echo "Importing OCI resources into Terraform state..."
 
