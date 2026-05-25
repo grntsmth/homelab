@@ -166,6 +166,16 @@ This is my SRE proof-of-work. I'm transitioning into the field from adjacent inf
 - **Terraform remote state.** OCI Object Storage backend with state locking and versioning. The current local-only state is a single-point-of-failure for the operator workstation.
 - **Chaos engineering pass.** A scoped chaos-monkey-style harness for the homelab — random pod kills, scheduled node drains, Tailscale link flaps — to stress-test recovery paths and generate the kind of real failure data that turns into runbooks and postmortems.
 
+### Documentation
+   
+   - **[Runbooks](docs/runbooks/)** — procedures for known failure modes,
+     written from real incidents as they're triaged. Current entry:
+     [CoreDNS DNS resolution fails after node reboot](docs/runbooks/coredns-fails-after-node-reboot.md).
+   - **[Postmortems](docs/postmortems/)** — blameless reviews of incidents
+     affecting the platform. Template documented in the directory README.
+     No entries committed yet; fabricated entries would defeat the purpose.
+
+
 ## Validate locally
 
 ```bash
