@@ -157,7 +157,7 @@ Terraform state and `terraform.tfvars` are gitignored. The monitoring and platfo
 
 ## Why this exists
 
-This is my SRE proof-of-work. I'm transitioning into the field from adjacent infrastructure roles (government facility electrical buildout, regulated banking operations), and a homelab forces the discipline I'd be hired for: define SLOs, monitor what matters, respond when things break, document what you learn. Running on OCI Free Tier means I can't hide behind managed services — every architectural choice is mine.
+This is my infrastructure proof-of-work. I'm transitioning into the field from adjacent infrastructure roles (systems buildout, regulated banking operations), and a homelab forces the discipline I'd be hired for: define SLOs, monitor what matters, respond when things break, document what you learn. Running on OCI Free Tier means I can't hide behind managed services — every architectural choice is mine.
 
 ## Currently exploring
 
