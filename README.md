@@ -61,7 +61,7 @@ flowchart LR
 
 ## Hosted workloads
 
-- **[chronicle](https://github.com/GRANTUR/chronicle)** — FastAPI + Discord bot calendar assistant, deployed in the `ecosystem` namespace.
+- **[chronicle](https://github.com/grntsmth/chronicle)** — FastAPI + Discord bot calendar assistant, deployed in the `ecosystem` namespace.
 - Private self-hosted services (game server, custom plugins) that live outside this repo.
 
 ## Service Level Objectives
