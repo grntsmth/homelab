@@ -1,6 +1,11 @@
-# ClusterIP — Alertmanager hits this from the monitoring namespace over
-# the cluster network. No external exposure; ServiceNow is the system of
-# record, not this translator.
+# NodePort — chosen over ClusterIP because the cluster's pod-network
+# is non-functional (see docs/postmortems/2026-05-30-...). hostNetwork
+# pods like Alertmanager can't reach ClusterIPs through the broken
+# kube-proxy iptables path, but NodePort on the SAME node as the
+# target pod works (no cross-node hop needed).
+#
+# sn-translator is pinned to role=game-server (high-palace); webhook
+# senders should target 100.92.211.3:30891 directly.
 apiVersion: v1
 kind: Service
 metadata:
@@ -9,11 +14,12 @@ metadata:
   labels:
     app: sn-translator
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: sn-translator
   ports:
     - name: http
       port: 8091
       targetPort: 8091
+      nodePort: 30891
       protocol: TCP

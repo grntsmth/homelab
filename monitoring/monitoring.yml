@@ -378,11 +378,24 @@ data:
       resolve_timeout: 5m
     route:
       receiver: discord
-      group_by: ['alertname', 'severity']
+      group_by: ['alertname', 'severity', 'namespace']
       group_wait: 30s
       group_interval: 5m
       repeat_interval: 4h
       routes:
+        # Any infrastructure-team alert (chaos experiments and critical
+        # host-health alerts both carry team=infrastructure) →
+        # ServiceNow AND Discord via continue. Single route avoids the
+        # double-fire that happens when overlapping matchers (chaos_type
+        # AND severity=critical) both route to the same receiver.
+        - matchers:
+            - team = infrastructure
+          receiver: servicenow
+          group_wait: 10s
+          group_interval: 1m
+          repeat_interval: 1h
+          continue: true
+        # Existing critical → Discord at faster cadence.
         - match:
             severity: critical
           receiver: discord
@@ -391,6 +404,15 @@ data:
       - name: discord
         webhook_configs:
           - url: 'http://localhost:9097'
+            send_resolved: true
+      - name: servicenow
+        # NodePort on the SAME node as sn-translator pod (high-palace,
+        # 100.92.211.3:30891). Cluster DNS and direct ClusterIP from this
+        # hostNetwork pod are both broken — see
+        # docs/postmortems/2026-05-30-kube-prom-stack-cutover-rollback.md.
+        # If sn-translator ever reschedules off high-palace, update this URL.
+        webhook_configs:
+          - url: 'http://100.92.211.3:30891/webhook'
             send_resolved: true
 
   discord-webhook.py: |
@@ -457,6 +479,12 @@ spec:
       hostNetwork: true
       dnsPolicy: None
       dnsConfig:
+        # Cluster DNS (10.43.0.10) is intentionally NOT here: this pod is
+        # hostNetwork, and the cluster's broken kube-proxy/iptables means
+        # hostNetwork → ClusterIP returns "no route to host". Putting
+        # CoreDNS first would hang every external DNS lookup until the
+        # CoreDNS attempt timed out. The servicenow webhook URL uses a
+        # literal node IP instead — see docs/postmortems/2026-05-30-...
         nameservers:
           - 169.254.169.254
           - 8.8.8.8

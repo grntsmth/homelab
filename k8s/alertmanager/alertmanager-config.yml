@@ -39,18 +39,13 @@ stringData:
       repeat_interval: 4h
 
       routes:
-        # ---- Chaos experiments → ServiceNow (also Discord for awareness) ----
+        # ---- Any infrastructure-team alert → ServiceNow + Discord ----
+        # Single route covers both chaos experiments and critical
+        # host-health alerts (both carry team=infrastructure). Avoids
+        # the double-fire that happened when chaos_type and
+        # severity=critical+team=infrastructure both matched a single
+        # alert and dispatched to the same receiver twice.
         - matchers:
-            - chaos_type =~ ".+"
-          receiver: servicenow
-          group_wait: 10s
-          group_interval: 1m
-          repeat_interval: 1h
-          continue: true
-
-        # ---- Critical infrastructure alerts → ServiceNow + Discord ----
-        - matchers:
-            - severity = critical
             - team = infrastructure
           receiver: servicenow
           group_wait: 10s
