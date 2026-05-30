@@ -107,6 +107,14 @@ spec:
                 secretKeyRef:
                   name: alertmanager-discord
                   key: webhook-url
+                  # Optional so the pod can deploy before the Secret
+                  # exists. Without a webhook URL the relay still
+                  # accepts POSTs from Alertmanager and tries to
+                  # forward — those calls 404 at discord.com but
+                  # don't crash the pod. Create the Secret later
+                  # (and `kubectl rollout restart deploy/alertmanager-discord-relay`)
+                  # to activate notifications.
+                  optional: true
           resources:
             requests:
               cpu: 10m

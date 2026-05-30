@@ -105,8 +105,8 @@ ever need a fresh IngressRoute pattern, see
 
 ## Pinning policy
 
-Chart version is pinned to `78.x` — semver patch tolerance, no
-auto-major-upgrade. Bumping to a new major (e.g. 79.x) is a deliberate
+Chart version is pinned to `86.x` — semver patch tolerance, no
+auto-major-upgrade. Bumping to a new major (e.g. 87.x) is a deliberate
 edit + commit, not a Flux auto-pull, because chart majors occasionally
 rename values keys.
 
