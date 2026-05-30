@@ -29,7 +29,7 @@ spec:
   chart:
     spec:
       chart: chaos-mesh
-      version: "2.7.x"  # latest 2.7 patch — pin tighter once a version is validated in-cluster
+      version: "2.8.x"  # current upstream as of 2026-05-29; semver patch tolerance
       sourceRef:
         kind: HelmRepository
         name: chaos-mesh
@@ -43,10 +43,9 @@ spec:
       retries: 3
       remediateLastFailure: true
   values:
-    # ARM64 nodes — chaos-mesh publishes multi-arch images so no override needed,
-    # but pinning here makes the assumption visible.
-    images:
-      tag: "v2.7.2"
+    # ARM64 nodes — chaos-mesh publishes multi-arch images. Letting the
+    # chart default images.tag to its appVersion means a `version: "2.8.x"`
+    # bump pulls matching images automatically without a separate edit.
 
     # k3s uses containerd, not docker; the chaos-daemon needs to talk to the
     # right socket on the host.
