@@ -1,0 +1,44 @@
+# =============================================================================
+# kube-prometheus-stack values snippet — wires this directory into the chart.
+#
+# This is NOT an apply-able manifest. It's the minimum set of values that
+# need to be present in your kube-prometheus-stack Helm release for the
+# alertmanager Secret in this directory to take effect.
+#
+# Drop these into the `values:` block of your HelmRelease (or values.yaml
+# for `helm upgrade --install`).
+# =============================================================================
+alertmanager:
+  # Suppress the chart-generated default config Secret. The chart will skip
+  # creating `alertmanager-kube-prometheus-stack-alertmanager` entirely when
+  # `config` is null, removing the ownership conflict with the Secret in
+  # alertmanager-config.yml.
+  config: null
+
+  alertmanagerSpec:
+    # Point the Alertmanager CR at our externally-managed Secret. The
+    # Operator mounts this at /etc/alertmanager/config and reloads on
+    # change — no helm upgrade needed to ship a routing change.
+    configSecret: alertmanager-chaos-config
+
+    # Pin to the watchtower node to match the rest of the monitoring stack.
+    nodeSelector:
+      role: watchtower
+
+    # Discord relay lives in the monitoring namespace as a separate
+    # Deployment (see discord-relay.yml). No sidecar needed here.
+
+# Keep the chart's default Prometheus settings, but make sure the
+# ruleSelector picks up our PrometheusRule.
+prometheus:
+  prometheusSpec:
+    nodeSelector:
+      role: watchtower
+    ruleSelector:
+      matchLabels:
+        release: kube-prometheus-stack
+    # Same selector logic for PodMonitor (chaos-mesh exports metrics with
+    # this label set in its HelmRelease values).
+    podMonitorSelector:
+      matchLabels:
+        release: kube-prometheus-stack

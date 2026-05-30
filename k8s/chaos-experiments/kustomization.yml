@@ -1,0 +1,15 @@
+# Kustomization is intentionally split from the parent — chaos experiments
+# are NOT applied on every Flux reconcile (that'd kill pods on a schedule
+# the operator didn't ask for). Use this dir as a launchpad:
+#
+#   kubectl apply -f k8s/chaos-experiments/pod-kill.yml
+#
+# Wire into a Flux Kustomization only once you've graduated to a Schedule
+# CR that you actually want running continuously.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - pod-kill.yml
+  - network-delay.yml
+  - cpu-stress.yml

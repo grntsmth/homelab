@@ -1,0 +1,25 @@
+# Kill one random pod in the ecosystem namespace.
+#
+# Manual trigger only: applied with `kubectl apply -f` (or Flux) but only
+# fires when a corresponding Workflow/Schedule references it — leaving this
+# as a plain PodChaos means it runs once on apply and stays in history.
+#
+# Drives KubePodNotRunning + (transitively) any latency probe that hits
+# Chronicle through ingress.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: ecosystem-pod-kill
+  namespace: chaos-mesh
+  labels:
+    chaos_type: pod-kill
+    team: infrastructure
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces:
+      - ecosystem
+  # Apply the chaos_type label to the affected pod so downstream alerts
+  # carry the breadcrumb back to the experiment that caused them.
+  duration: "10s"

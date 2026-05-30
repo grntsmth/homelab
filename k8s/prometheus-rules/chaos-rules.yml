@@ -1,0 +1,116 @@
+# =============================================================================
+# PrometheusRule — chaos detection alerts.
+#
+# Picked up by kube-prometheus-stack's Prometheus instance via the
+# `release: kube-prometheus-stack` label selector (the chart's default).
+# Adjust the label if your Helm release uses a different name.
+#
+# Each rule sets:
+#   - severity: critical|warning
+#   - team: infrastructure  → routes to ServiceNow via Alertmanager
+#   - chaos_signal: <kind>  → makes correlation back to chaos experiments
+#                             trivial in Grafana
+#
+# Annotation conventions: every alert has BOTH `summary` and `description`
+# so the ServiceNow translator can lift summary → short_description and
+# description → description without falling back to defaults.
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: chaos-rules
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: chaos-pipeline
+spec:
+  groups:
+    - name: chaos-pod-health
+      interval: 30s
+      rules:
+        - alert: KubePodNotRunning
+          expr: |
+            sum by (namespace, pod) (
+              kube_pod_status_phase{namespace="ecosystem", phase!~"Running|Succeeded"}
+            ) > 0
+          for: 1m
+          labels:
+            severity: critical
+            team: infrastructure
+            chaos_signal: pod-kill
+          annotations:
+            summary: "Pod {{ $labels.pod }} not running in {{ $labels.namespace }}"
+            description: |
+              Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has
+              been in a non-Running phase for at least 1 minute.
+
+              This is the signal Chaos Mesh's PodChaos (action=pod-kill)
+              experiment is designed to trip. Confirm whether a chaos
+              experiment is active before paging humans:
+
+                kubectl -n chaos-mesh get podchaos
+
+              If no experiment is in flight, treat as a real workload
+              failure and follow the ecosystem runbook.
+
+    - name: chaos-latency
+      interval: 30s
+      rules:
+        # Probe-based latency check. Requires a blackbox-exporter probe
+        # scraping the ecosystem ingress; falls back to "no data" cleanly
+        # when the probe is absent so the rule deploys safely.
+        - alert: HighLatencyDetected
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le, service) (
+                rate(probe_http_duration_seconds_bucket{namespace="ecosystem"}[2m])
+              )
+            ) > 1
+          for: 2m
+          labels:
+            severity: warning
+            team: infrastructure
+            chaos_signal: network-delay
+          annotations:
+            summary: "p95 latency >1s for {{ $labels.service }}"
+            description: |
+              p95 HTTP probe latency for service {{ $labels.service }} in
+              the ecosystem namespace is above 1s for at least 2 minutes
+              (current value: {{ $value | printf "%.2f" }}s).
+
+              Typical cause: Chaos Mesh NetworkChaos (action=delay) is
+              injecting egress latency. Confirm:
+
+                kubectl -n chaos-mesh get networkchaos
+
+              If unrelated to chaos, inspect Traefik access logs and the
+              upstream pod's resource consumption.
+
+    - name: chaos-node-pressure
+      interval: 30s
+      rules:
+        - alert: NodeCPUPressure
+          expr: |
+            100 - (avg by(instance) (
+              rate(node_cpu_seconds_total{mode="idle"}[2m])
+            ) * 100) > 75
+          for: 2m
+          labels:
+            severity: critical
+            team: infrastructure
+            chaos_signal: cpu-stress
+          annotations:
+            summary: "CPU pressure on {{ $labels.instance }} >75%"
+            description: |
+              CPU utilisation on node {{ $labels.instance }} has held above
+              75% for the last 2 minutes (current: {{ $value | printf "%.1f" }}%).
+
+              This is the signal Chaos Mesh's StressChaos (cpu, 80% load)
+              experiment is designed to trip. Confirm:
+
+                kubectl -n chaos-mesh get stresschaos
+
+              If unrelated to chaos, identify the noisy workload via:
+
+                kubectl top pods --all-namespaces --sort-by=cpu | head -20

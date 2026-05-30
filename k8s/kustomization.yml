@@ -1,0 +1,29 @@
+# Top-level kustomization for the chaos pipeline.
+#
+# Use this as the path target for a Flux Kustomization CR — e.g.
+#
+#   apiVersion: kustomize.toolkit.fluxcd.io/v1
+#   kind: Kustomization
+#   metadata:
+#     name: chaos-pipeline
+#     namespace: flux-system
+#   spec:
+#     interval: 10m
+#     path: ./k8s
+#     prune: true
+#     sourceRef:
+#       kind: GitRepository
+#       name: homelab
+#       namespace: flux-system
+#
+# chaos-experiments is intentionally excluded — applying it cluster-wide
+# would re-run experiments on every reconcile. Apply that directory
+# manually when you're ready to break something.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - sn-translator
+  - alertmanager
+  - chaos-mesh
+  - prometheus-rules

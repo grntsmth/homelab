@@ -1,0 +1,24 @@
+# Burn 80% CPU on a single node for 90 seconds.
+#
+# Targets high-palace (role=game-server) because it has more headroom than
+# the watchtower worker — keeps the monitoring stack itself out of the
+# blast radius. Drives NodeCPUPressure.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: high-palace-cpu-stress
+  namespace: chaos-mesh
+  labels:
+    chaos_type: resource
+    team: infrastructure
+spec:
+  mode: one
+  selector:
+    nodeSelectors:
+      role: "game-server"
+    # Empty pods selector + nodeSelectors targets a chaos-daemon on that node.
+  stressors:
+    cpu:
+      workers: 3
+      load: 80
+  duration: "90s"

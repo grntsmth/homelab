@@ -1,0 +1,86 @@
+# =============================================================================
+# Alertmanager configuration — kube-prometheus-stack compatible.
+#
+# IMPORTANT: this Secret is deliberately NOT named after the chart's default
+# (`alertmanager-kube-prometheus-stack-alertmanager`). Using a distinct name
+# means the chart never overwrites it during `helm upgrade` / Flux reconcile.
+# Wire it in via the HelmRelease values — see helm-values-snippet.yml in
+# this directory.
+#
+# Two new routes are layered on top of the existing Discord receiver:
+#   1. Any alert carrying a `chaos_type` label fans out to the ServiceNow
+#      translator AND continues to Discord.
+#   2. Critical infrastructure alerts (severity=critical AND team=infrastructure)
+#      do the same.
+#
+# The Discord receiver itself is preserved so we don't silently lose alerts
+# during the cutover to ServiceNow-as-system-of-record. The receiver URL
+# points at the standalone Discord relay Deployment (discord-relay.yml in
+# this directory), not the sidecar pattern used in monitoring/monitoring.yml.
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-chaos-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-pipeline
+type: Opaque
+stringData:
+  alertmanager.yaml: |
+    global:
+      resolve_timeout: 5m
+
+    route:
+      receiver: discord
+      group_by: ['alertname', 'severity', 'namespace']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+
+      routes:
+        # ---- Chaos experiments → ServiceNow (also Discord for awareness) ----
+        - matchers:
+            - chaos_type =~ ".+"
+          receiver: servicenow
+          group_wait: 10s
+          group_interval: 1m
+          repeat_interval: 1h
+          continue: true
+
+        # ---- Critical infrastructure alerts → ServiceNow + Discord ----
+        - matchers:
+            - severity = critical
+            - team = infrastructure
+          receiver: servicenow
+          group_wait: 10s
+          group_interval: 1m
+          repeat_interval: 1h
+          continue: true
+
+        # ---- Existing critical → Discord at faster cadence ----
+        - matchers:
+            - severity = critical
+          receiver: discord
+          repeat_interval: 1h
+
+    receivers:
+      - name: discord
+        webhook_configs:
+          - url: 'http://alertmanager-discord-relay.monitoring.svc.cluster.local:9097'
+            send_resolved: true
+
+      - name: servicenow
+        webhook_configs:
+          - url: 'http://sn-translator.ecosystem.svc.cluster.local:8091/webhook'
+            send_resolved: true
+            max_alerts: 0  # 0 = no batching cap; let SN handle each alert in the group
+
+    inhibit_rules:
+      # If a node is reporting down, suppress every per-node alert that
+      # originates from the same instance until the host comes back.
+      - source_matchers:
+          - alertname = NodeExporterDown
+        target_matchers:
+          - severity =~ "warning|critical"
+        equal: ['instance']

@@ -1,0 +1,85 @@
+# =============================================================================
+# Chaos Mesh — installed via FluxCD HelmRelease.
+#
+# Requires:
+#   - flux source-controller + helm-controller installed cluster-wide
+#   - The chaos-mesh namespace (see namespace.yml)
+#
+# The dashboard is disabled because the homelab already exposes Grafana for
+# observability and the dashboard's auth model would need separate Traefik
+# wiring we don't need yet. Experiments are applied/triggered via
+# `kubectl apply -f k8s/chaos-experiments/...`.
+# =============================================================================
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: chaos-mesh
+  namespace: chaos-mesh
+spec:
+  interval: 1h
+  url: https://charts.chaos-mesh.org
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: chaos-mesh
+  namespace: chaos-mesh
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: chaos-mesh
+      version: "2.7.x"  # latest 2.7 patch — pin tighter once a version is validated in-cluster
+      sourceRef:
+        kind: HelmRepository
+        name: chaos-mesh
+        namespace: chaos-mesh
+      interval: 1h
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+      remediateLastFailure: true
+  values:
+    # ARM64 nodes — chaos-mesh publishes multi-arch images so no override needed,
+    # but pinning here makes the assumption visible.
+    images:
+      tag: "v2.7.2"
+
+    # k3s uses containerd, not docker; the chaos-daemon needs to talk to the
+    # right socket on the host.
+    chaosDaemon:
+      runtime: containerd
+      socketPath: /run/k3s/containerd/containerd.sock
+      privileged: true
+
+    dashboard:
+      create: false
+
+    controllerManager:
+      replicaCount: 1
+      # Pin to a node with capacity — the control-plane has more RAM than
+      # the watchtower worker.
+      nodeSelector:
+        role: game-server
+
+    dnsServer:
+      create: true
+
+    # Prometheus discovery — kube-prometheus-stack's PodMonitor selectors
+    # pick these up via the label `release: kube-prometheus-stack`.
+    prometheus:
+      create: false
+    podMonitor:
+      enabled: true
+      labels:
+        release: kube-prometheus-stack
+
+    webhook:
+      # cert-manager is preferred when present; the helper chart falls back
+      # to its own self-signed certs if not. We're not running cert-manager
+      # in this lab, so leave certManager disabled.
+      certManager:
+        enabled: false

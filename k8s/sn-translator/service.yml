@@ -1,0 +1,19 @@
+# ClusterIP — Alertmanager hits this from the monitoring namespace over
+# the cluster network. No external exposure; ServiceNow is the system of
+# record, not this translator.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sn-translator
+  namespace: ecosystem
+  labels:
+    app: sn-translator
+spec:
+  type: ClusterIP
+  selector:
+    app: sn-translator
+  ports:
+    - name: http
+      port: 8091
+      targetPort: 8091
+      protocol: TCP

@@ -1,0 +1,154 @@
+# =============================================================================
+# Discord webhook relay — standalone Deployment.
+#
+# Replaces the sidecar pattern in monitoring/monitoring.yml, which can't
+# survive the cutover to the kube-prometheus-stack Operator-managed
+# Alertmanager pod (the Operator doesn't carry arbitrary sidecars).
+#
+# The Python script is identical to the original sidecar, lifted into a
+# ConfigMap. The webhook URL still comes from the pre-existing
+# `alertmanager-discord` Secret in the monitoring namespace.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-discord-relay-script
+  namespace: monitoring
+  labels:
+    app: alertmanager-discord-relay
+    app.kubernetes.io/part-of: chaos-pipeline
+data:
+  discord-webhook.py: |
+    #!/usr/bin/env python3
+    """Translates Prometheus Alertmanager webhooks into Discord embeds."""
+    import json, os
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from urllib.request import Request, urlopen
+
+    DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
+    COLORS = {"critical": 14177041, "warning": 16760576, "info": 3447003}
+    RESOLVED_COLOR = 3066993
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            embeds = []
+            for alert in body.get("alerts", []):
+                status = alert.get("status", "firing")
+                severity = alert["labels"].get("severity", "info")
+                color = RESOLVED_COLOR if status == "resolved" else COLORS.get(severity, 3447003)
+                title = f"{'RESOLVED' if status == 'resolved' else status.upper()}: {alert['labels'].get('alertname', 'Unknown')}"
+                desc = alert.get("annotations", {}).get("description", "")
+                summary = alert.get("annotations", {}).get("summary", "")
+                embeds.append({
+                    "title": title,
+                    "description": f"**{summary}**\n{desc}" if summary else desc,
+                    "color": color,
+                    "footer": {"text": f"Severity: {severity}"},
+                })
+            if embeds:
+                payload = json.dumps({"embeds": embeds[:10]}).encode()
+                req = Request(DISCORD_WEBHOOK, data=payload, headers={"Content-Type": "application/json", "User-Agent": "Homelab-Alertmanager/1.0"})
+                urlopen(req)
+            self.send_response(200)
+            self.end_headers()
+
+        def do_GET(self):
+            # Liveness/readiness shortcut so we don't pull in a framework.
+            if self.path == "/healthz":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok"}')
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, fmt, *args):
+            print(f"[webhook] {fmt % args}", flush=True)
+
+    if __name__ == "__main__":
+        print("Discord webhook relay listening on :9097", flush=True)
+        HTTPServer(("0.0.0.0", 9097), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager-discord-relay
+  namespace: monitoring
+  labels:
+    app: alertmanager-discord-relay
+    app.kubernetes.io/part-of: chaos-pipeline
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: alertmanager-discord-relay
+  template:
+    metadata:
+      labels:
+        app: alertmanager-discord-relay
+    spec:
+      nodeSelector:
+        role: watchtower
+      containers:
+        - name: relay
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/app/discord-webhook.py"]
+          ports:
+            - containerPort: 9097
+              name: http
+          env:
+            - name: DISCORD_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: alertmanager-discord
+                  key: webhook-url
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9097
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9097
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          volumeMounts:
+            - name: script
+              mountPath: /app/discord-webhook.py
+              subPath: discord-webhook.py
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: alertmanager-discord-relay-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager-discord-relay
+  namespace: monitoring
+  labels:
+    app: alertmanager-discord-relay
+spec:
+  type: ClusterIP
+  selector:
+    app: alertmanager-discord-relay
+  ports:
+    - name: http
+      port: 9097
+      targetPort: 9097
+      protocol: TCP

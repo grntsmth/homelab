@@ -1,0 +1,25 @@
+# Inject 200-500ms egress latency on all pods in the ecosystem namespace
+# for 2 minutes. Models a noisy-neighbour or congested-link incident.
+#
+# Drives any latency SLI alert; combined with Chronicle's outbound calls
+# to Google/Outlook this should also surface as a webhook-renewal delay.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: ecosystem-network-delay
+  namespace: chaos-mesh
+  labels:
+    chaos_type: network
+    team: infrastructure
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces:
+      - ecosystem
+  delay:
+    latency: "350ms"
+    jitter: "150ms"   # combines with latency for an effective 200-500ms range
+    correlation: "50"
+  direction: to
+  duration: "2m"
