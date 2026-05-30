@@ -332,7 +332,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: grafana-admin
-                  key: password
+                  key: admin-password
           resources:
             requests:
               cpu: 50m
