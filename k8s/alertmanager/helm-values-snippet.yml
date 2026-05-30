@@ -28,6 +28,18 @@ alertmanager:
     # Discord relay lives in the monitoring namespace as a separate
     # Deployment (see discord-relay.yml). No sidecar needed here.
 
+# Disable the node-exporter default alerts — k8s/prometheus-rules/host-health.yml
+# ships per-node tuned versions (95%/15m on the game-server, 90%/10m on the
+# watchtower). Leaving both on would double-page on every CPU/memory event.
+#
+# The chart's defaultRules are all-or-nothing per group; nodeExporterAlerting
+# is the group containing NodeCPUHighUsage, NodeMemoryHighUtilization, and
+# NodeFilesystemAlmostOutOfSpace, which are the overlaps. Kubernetes-level
+# rules (KubePodCrashLooping etc.) stay on — those don't conflict with ours.
+defaultRules:
+  rules:
+    nodeExporterAlerting: false
+
 # Keep the chart's default Prometheus settings, but make sure the
 # ruleSelector picks up our PrometheusRule.
 prometheus:
