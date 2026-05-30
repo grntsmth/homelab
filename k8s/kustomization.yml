@@ -24,6 +24,7 @@ kind: Kustomization
 
 resources:
   - sn-translator
+  - kube-prometheus-stack
   - alertmanager
   - chaos-mesh
   - prometheus-rules

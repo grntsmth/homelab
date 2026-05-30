@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+resources:
+  - helmrepository.yml
+  - helmrelease.yml
+
+# Generate a labelled ConfigMap from the dashboards/ directory. The chart's
+# grafana sidecar watches monitoring/ ns for ConfigMaps with the
+# `grafana_dashboard: "1"` label and auto-provisions them — no manual
+# import step required after the chart comes up.
+configMapGenerator:
+  - name: grafana-dashboards-homelab
+    files:
+      - dashboards/three-realms.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+        app.kubernetes.io/part-of: kube-prometheus-stack
+
+# Hash-suffix off so the chart's sidecar can stably find the ConfigMap by
+# name across reconciles. The sidecar polls by label anyway, so this is
+# defensive — but keeps `kubectl get cm` output predictable.
+generatorOptions:
+  disableNameSuffixHash: true
