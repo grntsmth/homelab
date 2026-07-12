@@ -17,8 +17,11 @@ resource "oci_core_instance" "high_palace" {
   }
 
   create_vnic_details {
-    subnet_id        = oci_core_subnet.fortress_subnet.id
-    private_ip       = "10.0.0.x"
+    subnet_id = oci_core_subnet.fortress_subnet.id
+    # Pinned VNIC address (placeholder) — the operational value lives in
+    # the private repo alongside the state. Pinning matters because the
+    # in-cluster relay to the GPU node references this address.
+    private_ip       = "10.0.0.10"
     assign_public_ip = true
     hostname_label   = "high-palace"
   }
