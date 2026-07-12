@@ -31,9 +31,10 @@ now (postmortem action item 3, option c). Concretely:
 1. Monitoring components run `hostNetwork: true` pinned to the watchtower
    node; Prometheus reaches Alertmanager at `localhost:9093`.
 2. Cross-component calls target **NodePorts on the node that hosts the
-   pod** (e.g. Alertmanager → sn-translator at `<control-plane>:30891`).
-   Cross-node NodePort DNAT rides the broken pod network and must not be
-   used — this exact mistake kept kube-state-metrics unscraped for weeks.
+   pod** (the pattern the retired Alertmanager → sn-translator path used,
+   and the postgres backup CronJob uses today). Cross-node NodePort DNAT
+   rides the broken pod network and must not be used — this exact
+   mistake kept kube-state-metrics unscraped for weeks.
 3. Pod-network pods may talk to ClusterIP services, never to pod IPs.
 4. Any tooling that assumes pod-network health (ServiceMonitors,
    PodMonitors, operator-style service discovery) is out of scope until

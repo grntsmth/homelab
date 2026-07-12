@@ -12,7 +12,7 @@ flowchart LR
 
     subgraph OCI["OCI Free Tier (ARM)"]
         direction TB
-        HP["high-palace<br/>3 vCPU / 18 GB<br/>k3s control-plane<br/>Traefik + TLS<br/>apps + sn-translator"]
+        HP["high-palace<br/>3 vCPU / 18 GB<br/>k3s control-plane<br/>Traefik + TLS<br/>app workloads"]
         SG["star-garden<br/>1 vCPU / 6 GB<br/>k3s worker<br/>role=watchtower"]
     end
 
@@ -31,7 +31,6 @@ flowchart LR
     HP -.Tailscale mesh.- SG
     HP -.Tailscale mesh.- TM
     SG --- Mon
-    A -->|team=infrastructure| SN[ServiceNow incidents]
     A -->|webhook| D[Discord]
 ```
 
@@ -50,21 +49,21 @@ flowchart LR
 | Mesh / overlay | Tailscale; flannel (see ADR-001) |
 | Ingress / TLS | Traefik v3, Let's Encrypt (ACME HTTP-01) |
 | Metrics | Prometheus, node-exporter, windows_exporter, nvidia_gpu_exporter, kube-state-metrics, blackbox-exporter, Traefik metrics |
-| Alerting | Alertmanager → Discord + ServiceNow (via [sn-translator](apps/sn-translator/)) |
+| Alerting | Alertmanager → Discord (a ServiceNow incident pipeline was built, verified, and retired — [ADR-003](docs/decisions/003-retire-servicenow-pipeline.md)) |
 | Chaos engineering | Chaos Mesh (Flux HelmRelease) — [chaos/](chaos/) |
 | Logs | Loki + Promtail — running, manifests not yet versioned here (tracked gap) |
 | Secrets | Sealed Secrets (bitnami-labs) + documented out-of-band bootstrap secrets |
-| CI | GitHub Actions — kubeconform (CRD-aware) over every manifest tree, Terraform fmt/validate, sn-translator lint + tests |
+| CI | GitHub Actions — kubeconform (CRD-aware) over every manifest tree, Terraform fmt/validate, dashboard JSON checks |
 
 ## Hosted workloads
 
 - **[chronicle](https://github.com/grntsmth/chronicle)** — FastAPI + Discord calendar assistant (`ecosystem` namespace).
-- **[sn-translator](apps/sn-translator/)** — Alertmanager → ServiceNow webhook bridge, developed in this repo: FastAPI, fingerprint-deduplicated incident lifecycle (create → auto-resolve), SQLite state, tested batch semantics.
 - Private self-hosted services (game server, custom plugins) that live outside this repo.
+- Retired: **sn-translator**, an Alertmanager → ServiceNow bridge developed here (FastAPI, fingerprint-deduplicated incident lifecycle, tested batch semantics) — verified end-to-end, then retired cleanly when its dev instance expired ([ADR-003](docs/decisions/003-retire-servicenow-pipeline.md); code in git history).
 
 ## Service Level Objectives
 
-**One real SLO is live**: ecosystem-service availability, measured by blackbox-exporter HTTP probes every 15s against Chronicle, sn-translator, Grafana, and Prometheus.
+**One real SLO is live**: ecosystem-service availability, measured by blackbox-exporter HTTP probes every 15s against Chronicle, Grafana, and Prometheus.
 
 | Piece | Where |
 |---|---|
@@ -82,7 +81,7 @@ All in [`monitoring/monitoring.yml`](monitoring/monitoring.yml) (`slo-ecosystem-
 |---|---|
 | Metrics + alerting | Prometheus v3.11 + Alertmanager v0.31, pinned to the watchtower node; per-node CPU thresholds, `TargetDown` coverage for every job, TLS-expiry alert |
 | **Alerting-path self-monitoring** | `NotificationDeliveryBroken` + a dedicated dashboard row watch `prometheus_notifications_*` — added after delivery silently failed for six weeks ([postmortem addendum](docs/postmortems/2026-05-30-kube-prom-stack-cutover-rollback.md)) |
-| Incident → ticket pipeline | `team=infrastructure` alerts open ServiceNow incidents via sn-translator and auto-resolve when the alert clears; Discord in parallel |
+| Service lifecycle discipline | Built, verified, and cleanly retired a ServiceNow incident pipeline when its backing instance expired ([ADR-003](docs/decisions/003-retire-servicenow-pipeline.md)) — the tree shows what runs, history shows what ran |
 | Chaos engineering | Chaos Mesh installed and healthy; committed experiments (pod-kill, cpu-stress, network-delay) run manually and on purpose — [chaos/README.md](chaos/README.md) |
 | Dashboards as code | Grafana **provisions** dashboards from `monitoring/dashboards/` via ConfigMap — the repo copy is the live copy; UI-only edits get reconciled away |
 | Postmortems | [Real ones only](docs/postmortems/) — current entry: a planned migration that failed on a hidden constraint and rolled back cleanly |
@@ -93,8 +92,7 @@ All in [`monitoring/monitoring.yml`](monitoring/monitoring.yml) (`slo-ecosystem-
 ### Known gaps (tracked, not hidden)
 
 - **Loki/Promtail/Uptime Kuma run unversioned** — deployed long ago, manifests never committed anywhere; Promtail's push path also needs the ADR-001 treatment. Fix or decommission is next on the list.
-- **No platform-layer backups.** Workload backup (6h CronJob) is managed privately; Prometheus TSDB, Grafana PVC, and k3s etcd snapshots are a tracked TODO.
-- **Postgres has no backup job yet** — highest-priority gap on the private side.
+- **No platform-layer backups.** Workload backups (6h world CronJob, nightly pg_dump) are managed privately; Prometheus TSDB, Grafana PVC, and k3s etcd snapshots are a tracked TODO, as are offsite copies.
 - **Terraform state is local-only** (see terraform/README.md for the remote-state plan).
 
 ## Security posture
@@ -106,9 +104,9 @@ All in [`monitoring/monitoring.yml`](monitoring/monitoring.yml) (`slo-ecosystem-
 
 **TLS** — auto-issued via Let's Encrypt HTTP-01 (`platform/traefik-config.yml`), ACME state on a persistent volume, `traefik_tls_certs_not_after` alerting at 14 days.
 
-**Secrets** — never committed in plaintext: Sealed Secrets where committed at all (sn-translator credentials, Grafana admin in the private repo), documented `kubectl create` bootstrap steps otherwise. Terraform state/tfvars gitignored.
+**Secrets** — never committed in plaintext: Sealed Secrets where committed at all (Grafana admin, in the private repo), documented `kubectl create` bootstrap steps otherwise. Terraform state/tfvars gitignored.
 
-**CI** — every push/PR: CRD-aware kubeconform across `monitoring/ platform/ apps/ chaos/`, Terraform fmt+validate, ruff + pytest on sn-translator, JSON validation on dashboards.
+**CI** — every push/PR: CRD-aware kubeconform across `monitoring/ platform/ chaos/`, Terraform fmt+validate, JSON validation on dashboards.
 
 ## What's in this repo
 
@@ -120,8 +118,6 @@ homelab/
 │   │                    #   node-exporter, blackbox-exporter, SLO + alert rules
 │   └── dashboards/      # Provisioned Grafana dashboards (three-realms,
 │                        #   platform-health, ecosystem-slo)
-├── apps/
-│   └── sn-translator/   # Alertmanager → ServiceNow bridge: code, tests, manifests
 ├── chaos/               # Chaos Mesh HelmRelease + experiment manifests
 ├── docs/
 │   ├── decisions/       # ADRs: the CNI constraint, GitOps posture
@@ -136,7 +132,7 @@ This is my infrastructure proof-of-work. I'm transitioning into the field from a
 
 ## Currently exploring
 
-- **First real chaos session** — Chaos Mesh is healthy and the alert→ServiceNow loop is verified; running pod-kill against the ecosystem namespace and writing up the timeline is the next milestone ([chaos/README.md](chaos/README.md)).
+- **First real chaos session** — Chaos Mesh is healthy and the alert→Discord loop is verified; running pod-kill against the ecosystem namespace and writing up the timeline is the next milestone ([chaos/README.md](chaos/README.md)).
 - **CNI remediation** — ADR-001 accepts the broken pod network for now; replacing kube-router/flannel (and re-attempting the kube-prometheus-stack migration with a connectivity precheck) is the deliberate future phase.
 - **Log pipeline** — version or decommission Loki/Promtail/Uptime Kuma.
 - **Terraform remote state** — OCI Object Storage backend with locking and versioning.
@@ -151,8 +147,6 @@ cd terraform && terraform fmt -check -recursive && terraform validate
 kubeconform -strict -summary \
   -schema-location default \
   -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-  monitoring/ platform/ apps/sn-translator/manifests/ chaos/
+  monitoring/ platform/ chaos/
 
-# sn-translator
-cd apps/sn-translator && pip install -r requirements-dev.txt && ruff check . && pytest
 ```

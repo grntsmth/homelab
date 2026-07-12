@@ -24,20 +24,25 @@ roadmap was rebased onto the hand-rolled stack.
   recording rules, multi-window burn-rate alerts, `ecosystem-slo`
   dashboard.
 
+## Revised (2026-07-12, later): ServiceNow retired
+
+The PDI expired before it could be woken; the pipeline's ServiceNow leg
+was retired the same day it was verified — see
+[ADR-003](decisions/003-retire-servicenow-pipeline.md). The closed loop
+is now experiment → alert → **Discord** → auto-resolve, fully
+self-hosted.
+
 ## Next
 
-1. **Wake the PDI and confirm the incident loop** — the May smoke-test
-   incident should auto-resolve and the current `TargetDown` should open
-   a fresh incident within its hourly re-notify.
-2. **First real chaos session** — apply `chaos/experiments/pod-kill.yml`
+1. **First real chaos session** — apply `chaos/experiments/pod-kill.yml`
    against `ecosystem`, watch detection → incident → auto-resolve, and
    write the timeline up as the second postmortem-grade artifact. Pair
    each experiment with a detection rule that provably fires (the
    committed host-health rules aren't tuned for 90-second faults).
-3. **Chaos timeline dashboard** — chaos events + `ALERTS` + incident
+2. **Chaos timeline dashboard** — chaos events + `ALERTS` + incident
    table on one screen; belongs in `monitoring/dashboards/` once there
    are real events to show.
-4. **Runbook per chaos type** — written from the sessions, not ahead of
+3. **Runbook per chaos type** — written from the sessions, not ahead of
    them.
 
 ## Out of scope (unchanged)

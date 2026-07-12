@@ -147,7 +147,6 @@ data:
           module: [http_2xx]
         static_configs:
           - targets:
-              - http://100.92.211.3:30891/health           # sn-translator
               - http://100.92.211.3:30890/chronicle/health # chronicle (serves under its route prefix)
               - http://100.123.222.55:30300/grafana/api/health
               - http://100.123.222.55:30090/prometheus/-/healthy
@@ -169,9 +168,10 @@ data:
       # monitoring stack, where sustained CPU is genuinely abnormal —
       # kept at 90% / 10m.
       #
-      # team=infrastructure routes an alert to ServiceNow via
-      # sn-translator (see the alertmanager-config route below) in
-      # addition to Discord.
+      # team=infrastructure marks platform alerts for routing. Today
+      # everything lands in Discord; the label is the taxonomy a future
+      # ticketing receiver keys on (a ServiceNow route used it until the
+      # dev instance expired — docs/decisions/003).
       - name: host-cpu
         rules:
           - alert: HighCPUUsage
@@ -378,7 +378,7 @@ data:
               description: |
                 Notification sends to Alertmanager are erroring
                 ({{ $value | printf "%.0f" }} in the last 10m). Every
-                alert — Discord and ServiceNow — is being dropped.
+                alert is being dropped before it can reach any receiver.
                 Verify Alertmanager is up on this node and reachable at
                 the address in prometheus.yml's alerting block.
 
@@ -682,19 +682,11 @@ data:
       group_interval: 5m
       repeat_interval: 4h
       routes:
-        # Any infrastructure-team alert (chaos experiments and critical
-        # host-health alerts both carry team=infrastructure) →
-        # ServiceNow AND Discord via continue. Single route avoids the
-        # double-fire that happens when overlapping matchers (chaos_type
-        # AND severity=critical) both route to the same receiver.
-        - matchers:
-            - team = infrastructure
-          receiver: servicenow
-          group_wait: 10s
-          group_interval: 1m
-          repeat_interval: 1h
-          continue: true
-        # Existing critical → Discord at faster cadence.
+        # Critical → Discord at faster cadence. (A ServiceNow route once
+        # lived here, fed by sn-translator; retired 2026-07-12 when the
+        # dev instance expired — see docs/decisions/003. The
+        # team=infrastructure labels on the rules remain as the routing
+        # taxonomy for whatever receiver comes next.)
         - match:
             severity: critical
           receiver: discord
@@ -703,15 +695,6 @@ data:
       - name: discord
         webhook_configs:
           - url: 'http://localhost:9097'
-            send_resolved: true
-      - name: servicenow
-        # NodePort on the SAME node as sn-translator pod (high-palace,
-        # 100.92.211.3:30891). Cluster DNS and direct ClusterIP from this
-        # hostNetwork pod are both broken — see
-        # docs/postmortems/2026-05-30-kube-prom-stack-cutover-rollback.md.
-        # If sn-translator ever reschedules off high-palace, update this URL.
-        webhook_configs:
-          - url: 'http://100.92.211.3:30891/webhook'
             send_resolved: true
 
   discord-webhook.py: |
@@ -863,7 +846,9 @@ data:
     modules:
       http_2xx:
         prober: http
-        timeout: 5s
+        # 10s: some probed pages (map renderers) legitimately take >5s
+        # cold; must stay under the 15s scrape interval.
+        timeout: 10s
         http:
           preferred_ip_protocol: ip4
           follow_redirects: true
@@ -877,6 +862,11 @@ metadata:
   namespace: monitoring
 spec:
   replicas: 1
+  # Recreate, not RollingUpdate: hostNetwork means the new pod cannot
+  # bind :9115 while the old one is still alive — a rolling update
+  # deadlocks on the port. Same reason as Prometheus/Grafana above.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: blackbox-exporter

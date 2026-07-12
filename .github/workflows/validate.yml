@@ -30,7 +30,7 @@ jobs:
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             -ignore-filename-pattern '.*dashboards/.*' \
             -skip Kustomization,PodChaos,NetworkChaos,StressChaos \
-            monitoring/ platform/ apps/sn-translator/manifests/ chaos/
+            monitoring/ platform/ chaos/
 
   validate-dashboards:
     runs-on: ubuntu-latest
@@ -52,29 +52,6 @@ jobs:
               print(f"ok {p} uid={uid} panels={len(d.get('panels', []))}")
           sys.exit(0 if seen else 1)
           EOF
-
-  test-sn-translator:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/sn-translator
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install -r requirements-dev.txt
-
-      - name: Lint
-        run: ruff check .
-
-      - name: Tests
-        run: pytest -q
 
   validate-terraform:
     runs-on: ubuntu-latest
