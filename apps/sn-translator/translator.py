@@ -12,8 +12,8 @@ from models import Alert
 def map_namespace_to_category(namespace: Optional[str]) -> str:
     """Translate a Kubernetes namespace into a ServiceNow category choice.
 
-    PDI devXXXXXX rejects "infrastructure" silently — see config.NAMESPACE_TO_CATEGORY
-    for the full quirks list.
+    Stock PDIs reject "infrastructure" silently — see
+    config.NAMESPACE_TO_CATEGORY for the full quirks list.
     """
     if not namespace:
         return "inquiry"
@@ -35,7 +35,13 @@ def alert_to_incident_payload(alert: Alert) -> dict:
     severity = labels.get("severity", "info")
     namespace = labels.get("namespace")
     instance = labels.get("instance", "")
-    chaos_type = labels.get("chaos_type") or labels.get("chaos-type")
+    # Chaos rules label their alerts chaos_signal; accept the older
+    # chaos_type spellings too so a stale rule set still enriches.
+    chaos_type = (
+        labels.get("chaos_signal")
+        or labels.get("chaos_type")
+        or labels.get("chaos-type")
+    )
 
     short_description = annotations.get("summary") or alertname
     description_body = annotations.get("description", "")

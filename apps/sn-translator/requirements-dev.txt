@@ -1,0 +1,4 @@
+# Test/lint tooling — runtime deps live in requirements.txt
+-r requirements.txt
+pytest==8.3.3
+ruff==0.13.3

@@ -5,6 +5,7 @@ from time import monotonic
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 
 import config
 import models
@@ -85,6 +86,39 @@ async def _resolve_for_alert(alert: models.Alert) -> dict:
     return {"action": "resolved", "incident": {"sys_id": existing["sys_id"], "number": existing["number"]}, "result": updated}
 
 
+async def _dispatch(alert: models.Alert) -> dict:
+    """Route one alert to create/resolve, converting failures into results.
+
+    One poisoned alert must not abort the rest of the batch: Alertmanager
+    groups unrelated alerts into a single webhook call, and an early raise
+    here used to drop every alert after the failing one.
+    """
+    try:
+        if alert.status == "firing":
+            return await _create_for_alert(alert)
+        if alert.status == "resolved":
+            return await _resolve_for_alert(alert)
+        log.warning("Unknown alert status %r — ignoring", alert.status)
+        return {"action": "skipped", "reason": f"unknown_status:{alert.status}"}
+    except HTTPException as exc:
+        return {"action": "error", "fingerprint": alert.fingerprint, "detail": exc.detail}
+    except Exception as exc:  # noqa: BLE001 — batch isolation is the point
+        log.exception("Unexpected failure processing alert %s", alert.fingerprint)
+        return {"action": "error", "fingerprint": alert.fingerprint, "detail": str(exc)}
+
+
+def _batch_response(results: list[dict]) -> JSONResponse:
+    """200 when every alert processed; 502 when any errored.
+
+    A 502 makes Alertmanager retry the whole group — safe, because creates
+    are deduplicated by fingerprint and resolves are idempotent, so already-
+    processed alerts become skips on the retry.
+    """
+    body = {"processed": len(results), "results": results}
+    failed = any(r.get("action") == "error" for r in results)
+    return JSONResponse(status_code=502 if failed else 200, content=body)
+
+
 @app.post("/webhook")
 async def webhook(payload: models.AlertmanagerPayload):
     """Receive an Alertmanager webhook; dispatch firing → create, resolved → close.
@@ -93,16 +127,8 @@ async def webhook(payload: models.AlertmanagerPayload):
     `send_resolved: true` is set, with a per-alert `status` field. We honour
     that here so a single route handles the full lifecycle.
     """
-    results = []
-    for alert in payload.alerts:
-        if alert.status == "firing":
-            results.append(await _create_for_alert(alert))
-        elif alert.status == "resolved":
-            results.append(await _resolve_for_alert(alert))
-        else:
-            log.warning("Unknown alert status %r — ignoring", alert.status)
-            results.append({"action": "skipped", "reason": f"unknown_status:{alert.status}"})
-    return {"processed": len(results), "results": results}
+    results = [await _dispatch(alert) for alert in payload.alerts]
+    return _batch_response(results)
 
 
 @app.post("/resolve")
@@ -118,8 +144,8 @@ async def resolve(payload: models.AlertmanagerPayload):
         if alert.status != "resolved":
             results.append({"action": "skipped", "reason": "not_resolved", "fingerprint": alert.fingerprint})
             continue
-        results.append(await _resolve_for_alert(alert))
-    return {"processed": len(results), "results": results}
+        results.append(await _dispatch(alert))
+    return _batch_response(results)
 
 
 @app.get("/health")
