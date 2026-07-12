@@ -74,7 +74,7 @@ Validate from a pod:
 
 ```bash
 kubectl -n monitoring exec deploy/prometheus -- nslookup kubernetes.default
-kubectl -n monitoring exec deploy/prometheus -- nslookup your-domain.example.com
+kubectl -n monitoring exec deploy/prometheus -- nslookup <your-public-domain>
 ```
 
 Both should return answers within a second.

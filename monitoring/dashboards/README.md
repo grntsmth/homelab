@@ -1,38 +1,38 @@
 # Grafana dashboards
 
-Dashboards in this directory are exported from the running Grafana on `star-garden` and versioned alongside the manifests that produce the metrics they visualize.
+Dashboards in this directory are **provisioned** into the running Grafana — the repo copy is the live copy. Grafana loads every JSON here from the `grafana-dashboards` ConfigMap via the file provider in `monitoring.yml` (`grafana-dashboard-provider`).
 
 ## Dashboards
 
 | File | UID | Title |
 |---|---|---|
-| `three-realms.json` | `three-realms` | Fortress Infrastructure — Three Realms |
+| `three-realms.json` | `three-realms` | Three Realms — Infrastructure Overview |
+| `platform-health.json` | `platform-health` | Platform Health — Alerting, Targets & Data Safety |
+| `ecosystem-slo.json` | `ecosystem-slo` | Ecosystem Services — SLO |
 
 ### `three-realms.json`
 
-Single-pane infra overview for all three nodes (`high-palace`, `star-garden`, `terminal`). Panels include:
+Single-pane infra overview for all three nodes (`high-palace`, `star-garden`, `terminal`): per-node CPU/memory/disk gauges, GPU temperature/utilization/VRAM/power, Kubernetes pod counts and restarts, Prometheus scrape health, per-component memory/CPU breakdowns.
 
-- Per-node CPU, memory, and disk gauges
-- Available-resource stats (free RAM/CPU/disk)
-- GPU temperature, utilization, VRAM, power (terminal / RTX 5070 Ti)
-- Time series: CPU, memory, GPU temp + power, GPU util + VRAM, disk usage, network RX, I/O wait, disk I/O time %
-- Kubernetes: pods running, pods by namespace, pod restarts (1h)
-- Prometheus: target count, scrape duration
-- Per-component memory and CPU breakdown for High Palace and Star Garden (top containers, stacked + bargauge)
+### `platform-health.json`
 
-Schema version 42 (Grafana 12.x).
+The meta-dashboard: is the monitoring itself working? Alerting-path row (notification sent/error counters — the exact signal that would have caught a six-week silent delivery failure), Alertmanager deliveries by receiver, scrape-target health, Traefik request rates + p95 latency + TLS cert expiry, CronJob backup freshness, failed Jobs.
 
-## Importing
+### `ecosystem-slo.json`
 
-The exported JSON has hard-coded datasource UIDs from the source Grafana instance. On import into a fresh Grafana:
+The 99%/30d availability SLO for the ecosystem services: per-instance availability, error-budget remaining, 1h/6h burn rates against the 14.4×/6× alert thresholds, probe latency and status codes. Fed by blackbox-exporter probes and the `slo:probe_availability:*` recording rules.
 
-1. *Dashboards → New → Import → Upload JSON file*.
-2. When prompted, remap each Prometheus datasource selector to the local Prometheus datasource.
-3. Save.
+## Deploying changes
 
-If you'd rather avoid the remap step, replace the literal datasource UIDs in the JSON with a template variable (`${DS_PROMETHEUS}`) and add a matching `datasource` templating list entry. Not done here because this dashboard is exported for showcase, not redistribution.
+```bash
+kubectl -n monitoring create configmap grafana-dashboards \
+  --from-file=monitoring/dashboards/ --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n monitoring rollout restart deploy/grafana
+```
+
+Dashboards edited in the Grafana UI must be exported back here (bump the JSON `version`) or the next reconcile overwrites the edit — that is the intended direction of truth. CI checks every file parses and UIDs stay unique.
 
 ## What's intentionally not here
 
-- **The Minecraft Server dashboard.** It's specific to the private operations repo and isn't relevant to the public infrastructure showcase.
-- **Per-application SLO dashboards.** None exist yet — see the *Service Level Objectives* section of the top-level README.
+- **Private workload dashboards.** They live in the private operations repo.
+- **Datasource templating.** JSONs carry the instance's Prometheus datasource UID directly; on a foreign Grafana, remap on import.
