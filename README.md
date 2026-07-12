@@ -1,6 +1,6 @@
 # homelab
 
-Multi-node k3s homelab on Oracle Cloud Free Tier (ARM) with a Windows GPU node joined over Tailscale. Demonstrates IaC, observability, secure ingress, and backup discipline at small scale.
+Multi-node k3s homelab on Oracle Cloud Free Tier (ARM) with a Windows GPU node joined over Tailscale. Demonstrates IaC, observability, SLOs with burn-rate alerting, incident response with real postmortems, and the discipline of documenting what actually runs — including the failures.
 
 ## Architecture
 
@@ -12,169 +12,134 @@ flowchart LR
 
     subgraph OCI["OCI Free Tier (ARM)"]
         direction TB
-        HP["high-palace<br/>3 vCPU / 18 GB<br/>k3s control-plane<br/>Traefik + TLS"]
+        HP["high-palace<br/>3 vCPU / 18 GB<br/>k3s control-plane<br/>Traefik + TLS<br/>apps + sn-translator"]
         SG["star-garden<br/>1 vCPU / 6 GB<br/>k3s worker<br/>role=watchtower"]
     end
 
     subgraph Local["Local workstation"]
-        TM["terminal<br/>Ryzen 9 7900X<br/>RTX 5070 Ti<br/>Ollama + GPU metrics"]
+        TM["terminal<br/>Ryzen 9 7900X<br/>RTX 5070 Ti<br/>GPU metrics"]
     end
 
-    subgraph Mon["Monitoring (on star-garden)"]
+    subgraph Mon["Monitoring (star-garden)"]
         P[Prometheus]
         G[Grafana]
-        L[Loki]
         A[Alertmanager]
-        U2[Uptime Kuma]
+        B[blackbox-exporter]
     end
 
     U -->|HTTPS| HP
     HP -.Tailscale mesh.- SG
     HP -.Tailscale mesh.- TM
-    SG -.Tailscale mesh.- TM
     SG --- Mon
+    A -->|team=infrastructure| SN[ServiceNow incidents]
     A -->|webhook| D[Discord]
 ```
 
-- **Ingress**: Traefik on `high-palace`, auto-TLS via Let's Encrypt.
+- **Ingress**: Traefik on `high-palace`, auto-TLS via Let's Encrypt, prometheus metrics exposed for per-service latency SLIs.
 - **Mesh**: Tailscale WireGuard across all three nodes. No public SSH.
-- **Storage**: local-path-provisioner. Persistent volumes pinned to the node they were provisioned on.
-- **GitOps**: manifests in this repo are applied with `kubectl apply -f`. Flux is on the roadmap (see below).
+- **Networking constraint, by decision**: direct pod-to-pod TCP is broken cluster-wide (kube-router + flannel interaction). Everything is deliberately designed around hostNetwork + same-node NodePorts + ClusterIP — see [ADR-001](docs/decisions/001-design-around-broken-pod-network.md) and the [postmortem](docs/postmortems/2026-05-30-kube-prom-stack-cutover-rollback.md) that surfaced it.
+- **GitOps posture**: Flux helm-controller reconciles Helm charts from committed HelmReleases (chaos-mesh today); plain manifests are applied with `kubectl apply` on purpose — [ADR-002](docs/decisions/002-helm-controller-without-repo-sync.md) explains why a full sync loop was evaluated and declined at single-operator scale.
 
-## Tech Stack
+## Tech stack
 
 | Layer | Tool |
 |---|---|
 | Cloud / IaC | Oracle Cloud Infrastructure, Terraform |
 | OS | Oracle Linux 9 (aarch64), Windows 11 |
 | Orchestration | k3s v1.34 |
-| Mesh / overlay | Tailscale, flannel VXLAN |
-| Ingress / TLS | Traefik v2, Let's Encrypt (ACME HTTP-01) |
-| Metrics | Prometheus, node-exporter, windows_exporter, nvidia_gpu_exporter, kube-state-metrics † |
-| Logs | Loki + Promtail † |
-| Alerting | Alertmanager → Discord |
-| Uptime | Uptime Kuma † |
-| Secrets | Sealed Secrets (bitnami-labs) † |
-| CI | GitHub Actions (kubeconform + `terraform validate`) |
-
-† Runs in the cluster but its manifests live in a private operations repo, not here. This repository's manifests cover Prometheus, Grafana, Alertmanager, node-exporter, Traefik, and the OCI infrastructure underneath.
+| Mesh / overlay | Tailscale; flannel (see ADR-001) |
+| Ingress / TLS | Traefik v3, Let's Encrypt (ACME HTTP-01) |
+| Metrics | Prometheus, node-exporter, windows_exporter, nvidia_gpu_exporter, kube-state-metrics, blackbox-exporter, Traefik metrics |
+| Alerting | Alertmanager → Discord + ServiceNow (via [sn-translator](apps/sn-translator/)) |
+| Chaos engineering | Chaos Mesh (Flux HelmRelease) — [chaos/](chaos/) |
+| Logs | Loki + Promtail — running, manifests not yet versioned here (tracked gap) |
+| Secrets | Sealed Secrets (bitnami-labs) + documented out-of-band bootstrap secrets |
+| CI | GitHub Actions — kubeconform (CRD-aware) over every manifest tree, Terraform fmt/validate, sn-translator lint + tests |
 
 ## Hosted workloads
 
-- **[chronicle](https://github.com/grntsmth/chronicle)** — FastAPI + Discord bot calendar assistant, deployed in the `ecosystem` namespace.
+- **[chronicle](https://github.com/grntsmth/chronicle)** — FastAPI + Discord calendar assistant (`ecosystem` namespace).
+- **[sn-translator](apps/sn-translator/)** — Alertmanager → ServiceNow webhook bridge, developed in this repo: FastAPI, fingerprint-deduplicated incident lifecycle (create → auto-resolve), SQLite state, tested batch semantics.
 - Private self-hosted services (game server, custom plugins) that live outside this repo.
 
 ## Service Level Objectives
 
-**Status: in development.** Formal SLOs, error budgets, and burn-rate alerts are not yet defined for this platform. The host-level indicators below are what's instrumented today — they're the foundation the SLO work will build on, not SLOs themselves.
+**One real SLO is live**: ecosystem-service availability, measured by blackbox-exporter HTTP probes every 15s against Chronicle, sn-translator, Grafana, and Prometheus.
 
-### Candidate SLIs (instrumented today)
+| Piece | Where |
+|---|---|
+| SLI | `probe_success` per instance, recorded as `slo:probe_availability:ratio_rate*` (5m/30m/1h/6h/30d) |
+| Objective | 99% over 30 days (~7.3h error budget) |
+| Fast burn alert | 14.4× budget burn over 1h AND 5m → critical (budget gone in <2 days) |
+| Slow burn alert | 6× over 6h AND 30m → warning | 
+| Dashboard | `monitoring/dashboards/ecosystem-slo.json` — availability, error budget remaining, burn rates |
 
-| SLI | PromQL | Defined in |
-|---|---|---|
-| Host CPU availability | `100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)` | `monitoring/monitoring.yml` |
-| Host memory availability | `(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100` | `monitoring/monitoring.yml` |
-| Root filesystem availability | `(1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100` | `monitoring/monitoring.yml` |
-| Per-node scrape liveness | `up{job=~"node-.*"}` | `monitoring/monitoring.yml` |
+All in [`monitoring/monitoring.yml`](monitoring/monitoring.yml) (`slo-ecosystem-availability` rule group). Next SLI candidates now that the data exists: Traefik per-service p95 latency (scraped, dashboarded, not yet an objective) and host-level indicators (alerting on absolute thresholds today).
 
-Each of the above already drives a threshold alert (warnings at 90% for CPU/memory, critical at 85% for disk, critical when a node-exporter scrape fails for 3m). The honest gap between these and real SLOs:
+## Reliability practices
 
-1. **No target reliability** (e.g., "99.5% of CPU samples below 80% over 30d"). Alerts fire on absolute thresholds, not on objectives.
-2. **No error-budget tracking** and no burn-rate alerts (fast/slow multi-window).
-3. **No per-service SLIs.** Traefik ingress latency, Chronicle uptime, and external HTTP success-rate are not scraped today.
+| Practice | Implementation |
+|---|---|
+| Metrics + alerting | Prometheus v3.11 + Alertmanager v0.31, pinned to the watchtower node; per-node CPU thresholds, `TargetDown` coverage for every job, TLS-expiry alert |
+| **Alerting-path self-monitoring** | `NotificationDeliveryBroken` + a dedicated dashboard row watch `prometheus_notifications_*` — added after delivery silently failed for six weeks ([postmortem addendum](docs/postmortems/2026-05-30-kube-prom-stack-cutover-rollback.md)) |
+| Incident → ticket pipeline | `team=infrastructure` alerts open ServiceNow incidents via sn-translator and auto-resolve when the alert clears; Discord in parallel |
+| Chaos engineering | Chaos Mesh installed and healthy; committed experiments (pod-kill, cpu-stress, network-delay) run manually and on purpose — [chaos/README.md](chaos/README.md) |
+| Dashboards as code | Grafana **provisions** dashboards from `monitoring/dashboards/` via ConfigMap — the repo copy is the live copy; UI-only edits get reconciled away |
+| Postmortems | [Real ones only](docs/postmortems/) — current entry: a planned migration that failed on a hidden constraint and rolled back cleanly |
+| Runbooks | [docs/runbooks/](docs/runbooks/) — written from real incidents, including a pod-network canary check with captured baseline output |
+| Decision records | [docs/decisions/](docs/decisions/) — the CNI constraint and the GitOps posture, each with revisit triggers |
+| Private/public split | Workload-specific scrape jobs, alert rules, and domain-facing probes arrive via **private overlay ConfigMaps** (`scrape_config_files` + `rule_files` globs) so this repo stays fully public and fully deployable with zero placeholder edits |
 
-Closing those three gaps is the next concrete piece of work — see [Currently exploring](#currently-exploring).
+### Known gaps (tracked, not hidden)
 
-## Reliability Practices
+- **Loki/Promtail/Uptime Kuma run unversioned** — deployed long ago, manifests never committed anywhere; Promtail's push path also needs the ADR-001 treatment. Fix or decommission is next on the list.
+- **No platform-layer backups.** Workload backup (6h CronJob) is managed privately; Prometheus TSDB, Grafana PVC, and k3s etcd snapshots are a tracked TODO.
+- **Postgres has no backup job yet** — highest-priority gap on the private side.
+- **Terraform state is local-only** (see terraform/README.md for the remote-state plan).
 
-| Practice | Implementation | Cite |
-|---|---|---|
-| Metrics + alerting stack | Prometheus v3.11.0 + Alertmanager v0.31.1, pinned to `role=watchtower` worker via nodeSelector | `monitoring/monitoring.yml` |
-| Notification routing | Alertmanager → inline Python webhook sidecar → Discord; critical alerts repeat every 1h, warnings every 4h | `monitoring/monitoring.yml` (`alertmanager-config` ConfigMap + `discord-webhook` sidecar) |
-| Alert on-call surface | 4 host-health rules: `HighCPUUsage`, `HighMemoryUsage`, `DiskSpaceLow`, `NodeExporterDown` | `monitoring/monitoring.yml` (`alerts.yml` in the Prometheus ConfigMap) |
-| Apply mechanism | `kubectl apply -f` against the manifests in this repo — single operator, no reconciliation controller | `monitoring/README.md`, `platform/README.md` |
-| CI validation | GitHub Actions: `kubeconform --strict` over `monitoring/` + `platform/`, plus `terraform fmt -check` and `terraform validate` on every push and PR to `main` | `.github/workflows/validate.yml` |
-| Persistent state | `prometheus-data` PVC (20 Gi, 30d retention), `grafana-data` PVC (5 Gi), ACME storage PVC (128 Mi) | `monitoring/monitoring.yml`, `platform/traefik-config.yml` |
-
-### Dashboards as code
-
-- **`monitoring/dashboards/three-realms.json`** — `Fortress Infrastructure — Three Realms`, the cross-node infrastructure overview (CPU, memory, disk, GPU, K8s pods, scrape duration). Exported from the running Grafana on `star-garden` and versioned alongside the manifests that produce its data. See `monitoring/dashboards/README.md` for import notes.
-
-Per-service SLO dashboards are not yet exported here — they'll land alongside the SLO work in *Currently exploring*.
-
-### Known gaps
-
-- **No platform-layer backups in this repo.** Workload-level backup (Minecraft CronJob, every 6h) is managed in a private operations repo. Prometheus TSDB, Grafana dashboards-in-PVC, and k3s etcd are not yet snapshotted on a schedule. Backup-of-the-platform is a tracked TODO.
-- **No recording rules.** Alert expressions are evaluated live each scrape — acceptable at this scale, worth flagging.
-
-## Security Posture
+## Security posture
 
 **Network**
+- **No public SSH.** OCI security list allows 22 only from the Tailscale CGNAT range; public ingress is 80/443 (Traefik). See `terraform/network.tf`.
+- **Tailscale addresses appear in committed manifests deliberately.** They are CGNAT-range and unreachable without tailnet membership — the tailnet ACL is the boundary, not obscurity. Domains, e-mail addresses, cloud OCIDs, and instance hostnames are *not* committed; environment-specific values arrive via out-of-band ConfigMaps/Secrets documented per component.
+- NetworkPolicies: workload namespaces (private repo) run zero-trust policies; the `monitoring` namespace runs permissive policies while kube-router remains the enforcer (ADR-001 — the enforcer is also the pod-network breaker, a tension the CNI decision will resolve).
 
-- **No public SSH.** OCI security list restricts port 22 to the Tailscale CGNAT range `100.64.0.0/10`. Public ingress is limited to TCP 80 and 443 (Traefik HTTP-01 challenges + HTTPS traffic). See `terraform/network.tf`.
-- **Inter-node traffic on Tailscale WireGuard.** Prometheus addresses scrape targets by Tailscale IP, not public IP — see the scrape config in `monitoring/monitoring.yml`.
+**TLS** — auto-issued via Let's Encrypt HTTP-01 (`platform/traefik-config.yml`), ACME state on a persistent volume, `traefik_tls_certs_not_after` alerting at 14 days.
 
-**TLS**
+**Secrets** — never committed in plaintext: Sealed Secrets where committed at all (sn-translator credentials, Grafana admin in the private repo), documented `kubectl create` bootstrap steps otherwise. Terraform state/tfvars gitignored.
 
-- Auto-issued via Let's Encrypt with the HTTP-01 challenge, configured through a k3s `HelmChartConfig` override at `platform/traefik-config.yml`. ACME state is persisted to a 128 Mi PVC so renewals survive pod restarts.
-- All `IngressRoute` examples in `platform/traefik-routes-example.yml` reference `certResolver: letsencrypt` and the `websecure` (443) entry point; the HTTP entry point redirects to HTTPS at the Traefik layer.
-
-**Secrets**
-
-- Runtime secrets (Grafana admin password, Discord webhook URL, Prometheus basic-auth users file) are never committed in plaintext. The READMEs in `monitoring/` and `platform/` document the out-of-band create-secret steps.
-- **Sealed Secrets** (bitnami-labs) is the encryption mechanism the cluster uses end-to-end; the controller is deployed from a private operations repo.
-- `terraform/.gitignore` excludes `terraform.tfvars`, `*.tfstate`, and `*.pem` from version control.
-
-**Workload isolation**
-
-- Prometheus and Grafana run as non-root with explicit UIDs (`runAsUser: 65534` for Prometheus, `472` for Grafana) and `runAsNonRoot: true`. See `monitoring/monitoring.yml`.
-- Prometheus's ClusterRole is scoped narrowly — `nodes`, `nodes/metrics`, `nodes/proxy`, and the `/metrics/cadvisor` non-resource URL — not full cluster-read.
-- Prometheus's `/prometheus/` ingress is gated by a Traefik `basicAuth` middleware backed by an out-of-band secret (`platform/traefik-routes-example.yml`); Grafana enforces its own login.
-
-**CI**
-
-- Every push to `main` and every PR runs `.github/workflows/validate.yml`: `kubeconform --strict` on the K8s manifests and `terraform fmt -check` + `terraform validate` on the IaC.
-
-### Known gaps
-
-- **No NetworkPolicies** in the `monitoring` namespace. Workload namespaces in the private operations repo (`minecraft`, `postgres`) have zero-trust policies; the platform namespace currently relies on `hostNetwork: true` + node placement rather than policy enforcement.
-- **No Pod Security Standards admission labels** on the `monitoring` namespace yet (Prometheus and Grafana already satisfy the `restricted` profile in practice).
-- **No image digest pinning.** Tags are version-pinned (`prom/prometheus:v3.11.0`, etc.) but not SHA-locked.
+**CI** — every push/PR: CRD-aware kubeconform across `monitoring/ platform/ apps/ chaos/`, Terraform fmt+validate, ruff + pytest on sn-translator, JSON validation on dashboards.
 
 ## What's in this repo
 
 ```
 homelab/
-├── terraform/              # OCI infrastructure (VCN, subnets, security lists, ARM compute)
-├── platform/               # Traefik HelmChartConfig + example IngressRoutes
-├── monitoring/             # Prometheus, Grafana, Alertmanager, node-exporter
-│   └── dashboards/         # Versioned Grafana dashboards (three-realms.json)
-├── docs/                   # Runbooks and postmortems
-└── .github/workflows/      # validate.yml — kubeconform + terraform fmt/validate
+├── terraform/           # OCI infrastructure (VCN, security lists, ARM compute)
+├── platform/            # Traefik HelmChartConfig (TLS, metrics) + example IngressRoutes
+├── monitoring/          # The live stack: Prometheus, Grafana, Alertmanager,
+│   │                    #   node-exporter, blackbox-exporter, SLO + alert rules
+│   └── dashboards/      # Provisioned Grafana dashboards (three-realms,
+│                        #   platform-health, ecosystem-slo)
+├── apps/
+│   └── sn-translator/   # Alertmanager → ServiceNow bridge: code, tests, manifests
+├── chaos/               # Chaos Mesh HelmRelease + experiment manifests
+├── docs/
+│   ├── decisions/       # ADRs: the CNI constraint, GitOps posture
+│   ├── postmortems/     # Blameless writeups of real incidents
+│   └── runbooks/        # Known failure modes, with tested commands
+└── .github/workflows/   # validate.yml — CI described above
 ```
-
-Terraform state and `terraform.tfvars` are gitignored. The monitoring and platform manifests here are sanitized — real secrets (Grafana admin password, Discord webhook, basic-auth hashes) are supplied via Kubernetes secrets or Sealed Secrets, not committed.
 
 ## Why this exists
 
-This is my infrastructure proof-of-work. I'm transitioning into the field from adjacent infrastructure roles (systems buildout, regulated banking operations), and a homelab forces the discipline I'd be hired for: define SLOs, monitor what matters, respond when things break, document what you learn. Running on OCI Free Tier means I can't hide behind managed services — every architectural choice is mine.
+This is my infrastructure proof-of-work. I'm transitioning into the field from adjacent roles (systems buildout, regulated operations), and a homelab forces the discipline I'd be hired for: define SLOs, monitor what matters, respond when things break, and write down what you learn — the postmortem and ADRs in this repo document a real migration failure and the architecture that came out of it. Running on OCI Free Tier means I can't hide behind managed services; every architectural choice (and mistake) here is mine.
 
 ## Currently exploring
 
-- **Lightweight GitOps controller (FluxCD candidate).** ArgoCD was trialled twice in a sibling project and retired both times — it's excellent for production-scale fleets, but the sync-op and finalizer overhead outweighed the drift-detection benefit at single-operator scale, and the homelab's frequency of dynamic live edits kept fighting the reconciler. FluxCD is being evaluated as a smaller-surface alternative that won't pin manifests against the ad-hoc changes a learning lab needs.
-- **SLO dashboards.** Promote the candidate SLIs above into objectives with target reliability, error-budget tracking, and multi-window burn-rate alerts; add per-service SLIs for Traefik ingress latency (p95/p99) and Chronicle uptime.
-- **Terraform remote state.** OCI Object Storage backend with state locking and versioning. The current local-only state is a single-point-of-failure for the operator workstation.
-- **Chaos engineering pass.** A scoped chaos-monkey-style harness for the homelab — random pod kills, scheduled node drains, Tailscale link flaps — to stress-test recovery paths and generate the kind of real failure data that turns into runbooks and postmortems.
-
-### Documentation
-   
-   - **[Runbooks](docs/runbooks/)** — procedures for known failure modes,
-     written from real incidents as they're triaged. Current entry:
-     [CoreDNS DNS resolution fails after node reboot](docs/runbooks/coredns-fails-after-node-reboot.md).
-   - **[Postmortems](docs/postmortems/)** — blameless reviews of incidents
-     affecting the platform. Template documented in the directory README.
-     No entries committed yet; fabricated entries would defeat the purpose.
-
+- **First real chaos session** — Chaos Mesh is healthy and the alert→ServiceNow loop is verified; running pod-kill against the ecosystem namespace and writing up the timeline is the next milestone ([chaos/README.md](chaos/README.md)).
+- **CNI remediation** — ADR-001 accepts the broken pod network for now; replacing kube-router/flannel (and re-attempting the kube-prometheus-stack migration with a connectivity precheck) is the deliberate future phase.
+- **Log pipeline** — version or decommission Loki/Promtail/Uptime Kuma.
+- **Terraform remote state** — OCI Object Storage backend with locking and versioning.
 
 ## Validate locally
 
@@ -182,6 +147,12 @@ This is my infrastructure proof-of-work. I'm transitioning into the field from a
 # Terraform
 cd terraform && terraform fmt -check -recursive && terraform validate
 
-# Kubernetes manifests
-kubeconform -strict -summary monitoring/ platform/
+# Kubernetes manifests (CRD-aware)
+kubeconform -strict -summary \
+  -schema-location default \
+  -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+  monitoring/ platform/ apps/sn-translator/manifests/ chaos/
+
+# sn-translator
+cd apps/sn-translator && pip install -r requirements-dev.txt && ruff check . && pytest
 ```

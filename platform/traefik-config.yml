@@ -28,6 +28,8 @@ spec:
       path: /data
     # Let's Encrypt via CLI args (Traefik Helm v39 method)
     additionalArguments:
+      # Real registration email lives in the operational copy of this
+      # file (private repo) — committed value here is a placeholder.
       - "--certificatesresolvers.letsencrypt.acme.email=acme@your-domain.example.com"
       - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"

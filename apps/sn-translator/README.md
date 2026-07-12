@@ -3,8 +3,8 @@
 FastAPI service that translates Alertmanager webhook payloads into
 ServiceNow incidents and closes them on resolution.
 
-Sibling deployment manifests live at `../k8s/sn-translator/`. The full
-pipeline architecture is documented in `../k8s/README.md`.
+Deployment manifests live in [`manifests/`](manifests/). The full
+pipeline architecture is documented in [`../../chaos/README.md`](../../chaos/README.md).
 
 ## Endpoints
 
@@ -33,8 +33,8 @@ way.
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-export SN_INSTANCE=devXXXXXX.service-now.com
-export SN_USER=REDACTED_USER
+export SN_INSTANCE=devXXXXXX.service-now.com   # your PDI hostname
+export SN_USER='<your PDI API user>'
 export SN_PASSWORD='<your PDI password>'
 
 uvicorn app:app --reload --port 8091
@@ -60,14 +60,32 @@ curl -X POST http://localhost:8091/webhook \
       },
       "annotations": {
         "summary": "Synthetic test from curl",
-        "description": "If you see this incident in devXXXXXX the pipeline is wired."
+        "description": "If you see this incident in your PDI the pipeline is wired."
       },
       "fingerprint": "test-fingerprint-001"
     }]
   }'
 ```
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+ruff check . && pytest
+```
+
+The suite covers the mapping logic (`translator.py`) and the webhook
+batch semantics — most importantly that one poisoned alert cannot abort
+the rest of an Alertmanager group, and that any failure returns 502 so
+Alertmanager retries against the fingerprint-deduplicated store.
+
 ## Image build
 
-See `../k8s/README.md#building-the-translator-image-arm64` — the build
-is one `docker build` + `k3s ctr images import` step.
+```bash
+docker build -t sn-translator:latest .
+docker save sn-translator:latest -o /tmp/sn.tar
+sudo /usr/local/bin/k3s ctr images import /tmp/sn.tar && rm /tmp/sn.tar
+kubectl -n ecosystem rollout restart deploy/sn-translator
+```
+
+(`imagePullPolicy: IfNotPresent` — the image never leaves the node.)

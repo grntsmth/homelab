@@ -34,7 +34,7 @@ Right now `terraform.tfstate` lives on my workstation and is gitignored. That's 
 
 ## Security-list ingress
 
-The `fortress_vcn` security list opens:
+The VCN's security list opens:
 
 - `22/tcp` from `100.64.0.0/10` (Tailscale CGNAT only — no public SSH)
 - `80/tcp`, `443/tcp` from `0.0.0.0/0` (Traefik + Let's Encrypt HTTP-01)

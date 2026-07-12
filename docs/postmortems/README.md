@@ -83,4 +83,6 @@ thing present-me already knows.
 
 ## Index
 
-_No postmortems committed yet. The first entry will document a real incident — entries fabricated for portfolio reasons would defeat the purpose._
+| Date | Incident | Severity |
+|---|---|---|
+| [2026-05-30](2026-05-30-kube-prom-stack-cutover-rollback.md) | kube-prometheus-stack cutover rolled back — pod-network scraping infeasible | SEV-3 |

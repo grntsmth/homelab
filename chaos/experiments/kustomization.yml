@@ -2,7 +2,7 @@
 # are NOT applied on every Flux reconcile (that'd kill pods on a schedule
 # the operator didn't ask for). Use this dir as a launchpad:
 #
-#   kubectl apply -f k8s/chaos-experiments/pod-kill.yml
+#   kubectl apply -f chaos/experiments/pod-kill.yml
 #
 # Wire into a Flux Kustomization only once you've graduated to a Schedule
 # CR that you actually want running continuously.

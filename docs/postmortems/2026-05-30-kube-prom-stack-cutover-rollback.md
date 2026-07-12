@@ -30,7 +30,7 @@ ClusterIP only.
 - **Internal:** 60 min of operator time. No data loss — Prometheus TSDB
   PVC (30d history) and Grafana PVC preserved through both transitions.
 - **Scope:** `monitoring` namespace, both nodes. Workload namespaces
-  (`ecosystem`, `minecraft`, `postgres`) untouched.
+  (`ecosystem`, `postgres`, the game-server namespace) untouched.
 
 ## Timeline (ET)
 
@@ -107,7 +107,7 @@ What's actually working in production hides the problem:
 - Every workload pod uses `hostNetwork: true` (monitoring, Loki, Grafana,
   Alertmanager, Prometheus, uptime-kuma) → pod IPs irrelevant, host
   routing applies
-- Pod-network workloads (chronicle, sn-translator, Minecraft) reach
+- Pod-network workloads (chronicle, sn-translator, the game server) reach
   collaborators only via **ClusterIP Service** → kube-proxy DNAT happens
   in `OUTPUT`/`PREROUTING`, then `MASQUERADE` rewrites source to the
   node IP, making the packet appear `src-type=LOCAL` to the destination
@@ -169,13 +169,27 @@ therefore unreachable from the chart's Prometheus.
 
 | # | Action | Owner | Due | Status |
 |---|---|---|---|---|
-| 1 | Update CLAUDE.md to reflect that pod-to-pod is broken cluster-wide, not just cross-node | me | 2026-06-06 | open |
-| 2 | Add a `docs/runbooks/pod-to-pod-connectivity-check.md` runbook — two test pods, ping each other, document the working/expected output | me | 2026-06-06 | open |
-| 3 | Decide on a CNI remediation path: (a) `--disable-network-policy` on k3s server, (b) replace kube-router with explicit Cilium/Calico install, or (c) accept the constraint and design around hostNetwork+ClusterIP forever | me | 2026-06-13 | open |
-| 4 | Fix `kubeStateMetrics: enabled: false` in `k8s/kube-prometheus-stack/helmrelease.yml` so the next attempt doesn't duplicate ksm | me | next attempt | open |
-| 5 | Keep the `helm-controller` + `notification-controller` nodeSelector pin to high-palace (whether persisted via patch manifest in `clusters/homelab/` or in the controllers' Deployments directly) | me | 2026-06-06 | open |
-| 6 | Wire `sn-translator` into the *existing* old-stack Alertmanager (`webhook_config` in the `alertmanager-config` ConfigMap) so the chaos pipeline can run end-to-end on working infrastructure while CNI remediation is decided | me | 2026-06-02 | open |
-| 7 | Drop the `k8s/kube-prometheus-stack/` HelmRelease file's `78.x → 86.x` bump commit forward; it's correct, it's just dormant. Add a note in `k8s/kube-prometheus-stack/README.md` flagging the CNI prerequisite | me | next attempt | open |
+| 1 | Update CLAUDE.md to reflect that pod-to-pod is broken cluster-wide, not just cross-node | me | 2026-06-06 | done 2026-07-12 |
+| 2 | Add a `docs/runbooks/pod-to-pod-connectivity-check.md` runbook — two test pods, ping each other, document the working/expected output | me | 2026-06-06 | done 2026-07-12 |
+| 3 | Decide on a CNI remediation path: (a) `--disable-network-policy` on k3s server, (b) replace kube-router with explicit Cilium/Calico install, or (c) accept the constraint and design around hostNetwork+ClusterIP forever | me | 2026-06-13 | done 2026-07-12 — option (c) for now, see [ADR-001](../decisions/001-design-around-broken-pod-network.md) |
+| 4 | Fix `kubeStateMetrics: enabled: false` in `k8s/kube-prometheus-stack/helmrelease.yml` so the next attempt doesn't duplicate ksm | me | next attempt | obsolete — dormant tree removed 2026-07-12 (ADR-001); a future attempt starts fresh |
+| 5 | Keep the `helm-controller` + `notification-controller` nodeSelector pin to high-palace (whether persisted via patch manifest in `clusters/homelab/` or in the controllers' Deployments directly) | me | 2026-06-06 | done — live patch kept; documented with re-apply command in [ADR-002](../decisions/002-helm-controller-without-repo-sync.md) |
+| 6 | Wire `sn-translator` into the *existing* old-stack Alertmanager (`webhook_config` in the `alertmanager-config` ConfigMap) so the chaos pipeline can run end-to-end on working infrastructure while CNI remediation is decided | me | 2026-06-02 | done 2026-05-30 (582d71d) — but see addendum below |
+| 7 | Drop the `k8s/kube-prometheus-stack/` HelmRelease file's `78.x → 86.x` bump commit forward; it's correct, it's just dormant. Add a note in `k8s/kube-prometheus-stack/README.md` flagging the CNI prerequisite | me | next attempt | obsolete — dormant tree removed 2026-07-12 (ADR-001) |
+
+### Addendum (2026-07-12)
+
+The rollback verification at `22:30` checked scrape targets, not
+notification delivery — and delivery was in fact broken. The restored
+`prometheus.yml` targeted `alertmanager:9093`, unresolvable under the
+pod's `dnsPolicy: None` external-nameserver config, so **every alert
+(Discord and ServiceNow) was silently dropped for the following six
+weeks** — 25,087 notification errors, zero sent. Item 6's wiring was
+correct but never carried a single alert until the target was fixed to
+`localhost:9093` on 2026-07-12. Lesson folded into the alerting-path
+rules: a `NotificationDeliveryBroken` alert and dashboard panels now
+watch `prometheus_notifications_*` directly, and any future migration
+checklist verifies delivery end-to-end, not just target health.
 
 ## Drift surfaced
 

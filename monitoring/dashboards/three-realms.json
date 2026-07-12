@@ -103,7 +103,7 @@
           "datasource": {
             "uid": "bfhc25m1mzi0we"
           },
-          "expr": "100 - avg(rate(node_cpu_seconds_total{instance=\"high-palace\",mode=~\"idle|iowait\"}[1m])) * 100",
+          "expr": "100 - avg(rate(node_cpu_seconds_total{instance=\"high-palace\",mode=\"idle\"}[1m])) * 100",
           "refId": "A"
         }
       ],
@@ -233,7 +233,7 @@
           "datasource": {
             "uid": "bfhc25m1mzi0we"
           },
-          "expr": "100 - avg(rate(node_cpu_seconds_total{instance=\"star-garden\",mode=~\"idle|iowait\"}[1m])) * 100",
+          "expr": "100 - avg(rate(node_cpu_seconds_total{instance=\"star-garden\",mode=\"idle\"}[1m])) * 100",
           "refId": "A"
         }
       ],
@@ -553,72 +553,6 @@
         }
       ],
       "title": "Prom Targets",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "uid": "bfhc25m1mzi0we"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 3,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "yellow",
-                "value": 0.5
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 8,
-        "y": 6
-      },
-      "id": 34,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.4.2",
-      "targets": [
-        {
-          "datasource": {
-            "uid": "bfhc25m1mzi0we"
-          },
-          "expr": "minecraft_status_response_time_seconds",
-          "refId": "A"
-        }
-      ],
-      "title": "Response Time",
       "type": "stat"
     },
     {
@@ -1161,7 +1095,7 @@
           "datasource": {
             "uid": "bfhc25m1mzi0we"
           },
-          "expr": "100 - avg by(instance)(rate(node_cpu_seconds_total{mode=~\"idle|iowait\"}[1m])) * 100",
+          "expr": "100 - avg by(instance)(rate(node_cpu_seconds_total{mode=\"idle\"}[1m])) * 100",
           "legendFormat": "{{instance}}",
           "refId": "A"
         },
@@ -2063,7 +1997,7 @@
             "type": "prometheus",
             "uid": "bfhc25m1mzi0we"
           },
-          "expr": "avg(rate(node_cpu_seconds_total{instance=\"high-palace\",mode=~\"idle|iowait\"}[5m])) * 100",
+          "expr": "avg(rate(node_cpu_seconds_total{instance=\"high-palace\",mode=\"idle\"}[5m])) * 100",
           "refId": "A"
         }
       ],
@@ -2255,7 +2189,7 @@
             "type": "prometheus",
             "uid": "bfhc25m1mzi0we"
           },
-          "expr": "avg(rate(node_cpu_seconds_total{instance=\"star-garden\",mode=~\"idle|iowait\"}[5m])) * 100",
+          "expr": "avg(rate(node_cpu_seconds_total{instance=\"star-garden\",mode=\"idle\"}[5m])) * 100",
           "refId": "A"
         }
       ],
@@ -2755,24 +2689,6 @@
             "type": "prometheus",
             "uid": "bfhc25m1mzi0we"
           },
-          "expr": "container_memory_working_set_bytes{container=\"minecraft\",node=\"high-palace\"} / 1024 / 1024",
-          "legendFormat": "Minecraft",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "bfhc25m1mzi0we"
-          },
-          "expr": "sum(container_memory_working_set_bytes{container!=\"\",container!=\"POD\",container!=\"minecraft\",namespace=\"argocd\",node=\"high-palace\"}) / 1024 / 1024",
-          "legendFormat": "ArgoCD",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "bfhc25m1mzi0we"
-          },
           "expr": "sum(container_memory_working_set_bytes{container!=\"\",container!=\"POD\",namespace=\"kube-system\",node=\"high-palace\"}) / 1024 / 1024",
           "legendFormat": "kube-system",
           "refId": "C"
@@ -3119,8 +3035,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Fortress Infrastructure — Three Realms",
+  "title": "Three Realms — Infrastructure Overview",
   "uid": "three-realms",
-  "version": 15,
+  "version": 16,
   "weekStart": ""
 }

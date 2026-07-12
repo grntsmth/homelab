@@ -8,7 +8,7 @@
 # The dashboard is disabled because the homelab already exposes Grafana for
 # observability and the dashboard's auth model would need separate Traefik
 # wiring we don't need yet. Experiments are applied/triggered via
-# `kubectl apply -f k8s/chaos-experiments/...`.
+# `kubectl apply -f chaos/experiments/...`.
 # =============================================================================
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: HelmRepository
@@ -67,14 +67,14 @@ spec:
     dnsServer:
       create: true
 
-    # Prometheus discovery — kube-prometheus-stack's PodMonitor selectors
-    # pick these up via the label `release: kube-prometheus-stack`.
+    # No prometheus-operator runs here (the kube-prometheus-stack
+    # migration was rolled back — see docs/decisions/ADR-001), so a
+    # PodMonitor CR would be decorative. Chaos-mesh metrics get scraped
+    # the day the CNI decision unblocks operator-style discovery.
     prometheus:
       create: false
     podMonitor:
-      enabled: true
-      labels:
-        release: kube-prometheus-stack
+      enabled: false
 
     webhook:
       # cert-manager is preferred when present; the helper chart falls back

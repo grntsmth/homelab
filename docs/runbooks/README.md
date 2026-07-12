@@ -56,3 +56,4 @@ it earlier. Track as a TODO if not yet implemented.
 | Runbook | Severity | Symptom |
 |---|---|---|
 | [coredns-fails-after-node-reboot.md](coredns-fails-after-node-reboot.md) | critical | Pods can't resolve DNS after a node returns from reboot; CoreDNS upstream pointed at unreachable Tailscale MagicDNS. |
+| [pod-to-pod-connectivity-check.md](pod-to-pod-connectivity-check.md) | preflight | Canary check for direct pod-to-pod TCP — run before adopting anything that assumes pod-network health, and after k3s/CNI changes. |
