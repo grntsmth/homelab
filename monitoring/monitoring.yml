@@ -25,10 +25,28 @@ data:
     alerting:
       alertmanagers:
         - static_configs:
-            - targets: ['alertmanager:9093']
+            # Alertmanager runs hostNetwork on this same node (both pinned
+            # to role=watchtower), so localhost always works. The service
+            # name 'alertmanager:9093' does NOT resolve here: this pod is
+            # dnsPolicy:None with external nameservers only (see below).
+            # That misconfiguration silently dropped every notification
+            # for 6 weeks — see the alerting-path panels in the
+            # platform-health dashboard, which now watch for exactly this.
+            - targets: ['localhost:9093']
 
     rule_files:
       - '/etc/prometheus/rules/*.yml'
+      # Private rule overlay (optional): extra alert groups for workloads
+      # that live outside this repo. Mounted from the ConfigMap
+      # 'prometheus-private-rules' if it exists; empty otherwise.
+      - '/etc/prometheus/rules-private/*.yml'
+
+    # Private scrape overlay (optional): extra scrape jobs for workloads
+    # that live outside this repo, supplied by the ConfigMap
+    # 'prometheus-private-scrape'. Keeps this file both fully public and
+    # fully deployable — private targets never need to be committed here.
+    scrape_config_files:
+      - '/etc/prometheus/scrape.d/*.yml'
 
     scrape_configs:
       - job_name: 'prometheus'
@@ -62,9 +80,15 @@ data:
               instance: 'terminal'
         scrape_interval: 15s
 
+      # kube-state-metrics pod runs on high-palace; a NodePort must be
+      # addressed on the node that actually hosts the pod, because
+      # cross-node NodePort DNAT rides the broken pod network (see
+      # docs/postmortems/2026-05-30-kube-prom-stack-cutover-rollback.md
+      # and docs/decisions/). Targeting star-garden's NodePort here left
+      # this job down — and every kube_* metric absent — for weeks.
       - job_name: 'kube-state-metrics'
         static_configs:
-          - targets: ['100.123.222.55:30082']
+          - targets: ['100.92.211.3:30082']
         scrape_interval: 30s
 
       - job_name: 'kubelet-cadvisor-hp'
@@ -101,43 +125,158 @@ data:
 
   alerts.yml: |
     groups:
-      - name: host-health
+      # CPU thresholds differ per node because workload distribution is
+      # uneven: high-palace (role=game-server) runs the game server and
+      # the ecosystem app pods, where sustained >90% is expected during
+      # world generation or LLM inference — lifted to 95% with a 15m
+      # sustain window. star-garden (role=watchtower) runs only this
+      # monitoring stack, where sustained CPU is genuinely abnormal —
+      # kept at 90% / 10m.
+      #
+      # team=infrastructure routes an alert to ServiceNow via
+      # sn-translator (see the alertmanager-config route below) in
+      # addition to Discord.
+      - name: host-cpu
         rules:
           - alert: HighCPUUsage
-            expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+            expr: |
+              100 - (
+                avg by(instance) (
+                  rate(node_cpu_seconds_total{mode="idle",instance="high-palace"}[5m])
+                ) * 100
+              ) > 95
+            for: 15m
+            labels:
+              severity: warning
+              team: infrastructure
+              node_role: game-server
+            annotations:
+              summary: "Sustained high CPU on game-server {{ $labels.instance }}"
+              description: |
+                CPU usage on {{ $labels.instance }} has held above 95% for
+                the last 15 minutes (current: {{ $value | printf "%.1f" }}%).
+
+                high-palace runs the workload pods. Short bursts above 95%
+                are normal — this fires only on sustained pegging. Triage:
+
+                  kubectl top pods --all-namespaces --sort-by=cpu | head -10
+
+          - alert: HighCPUUsage
+            expr: |
+              100 - (
+                avg by(instance) (
+                  rate(node_cpu_seconds_total{mode="idle",instance="star-garden"}[5m])
+                ) * 100
+              ) > 90
             for: 10m
             labels:
               severity: warning
+              team: infrastructure
+              node_role: watchtower
             annotations:
-              summary: "High CPU usage on {{ $labels.instance }}"
-              description: "CPU usage is {{ $value | printf \"%.1f\" }}% (threshold: 90%)."
+              summary: "Sustained high CPU on watchtower {{ $labels.instance }}"
+              description: |
+                CPU usage on {{ $labels.instance }} has held above 90% for
+                10 minutes (current: {{ $value | printf "%.1f" }}%).
 
+                star-garden runs only the monitoring stack — sustained CPU
+                there is genuinely abnormal. Likely causes: Prometheus
+                query overload, runaway log ingestion, or an alert storm.
+
+                  kubectl top pods -n monitoring --sort-by=cpu
+
+      - name: host-memory
+        rules:
           - alert: HighMemoryUsage
             expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
             for: 5m
             labels:
               severity: warning
+              team: infrastructure
             annotations:
               summary: "High memory usage on {{ $labels.instance }}"
-              description: "Memory usage is {{ $value | printf \"%.1f\" }}% (threshold: 90%)."
+              description: |
+                Memory usage on {{ $labels.instance }} is
+                {{ $value | printf "%.1f" }}% (threshold: 90%). Identify
+                the offender:
 
+                  kubectl top pods --all-namespaces --sort-by=memory | head -10
+
+      - name: host-disk
+        rules:
           - alert: DiskSpaceLow
             expr: (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 > 85
             for: 5m
             labels:
               severity: critical
+              team: infrastructure
             annotations:
               summary: "Disk space low on {{ $labels.instance }}"
-              description: "Root filesystem is {{ $value | printf \"%.1f\" }}% full (threshold: 85%)."
+              description: |
+                Root filesystem on {{ $labels.instance }} is
+                {{ $value | printf "%.1f" }}% full (threshold: 85%).
 
+                At 100% the cluster stops admitting writes — everything
+                that persists data (Prometheus TSDB, Grafana, app SQLite
+                stores) starts failing. Free space:
+
+                  sudo du -sh /var/lib/rancher/k3s/* 2>/dev/null | sort -h
+
+      - name: host-availability
+        rules:
           - alert: NodeExporterDown
             expr: up{job=~"node-.*"} == 0
             for: 3m
             labels:
               severity: critical
+              team: infrastructure
             annotations:
-              summary: "Node exporter is down on {{ $labels.instance }}"
-              description: "Cannot scrape host metrics."
+              summary: "Node exporter scrape failing for {{ $labels.instance }}"
+              description: |
+                Prometheus has been unable to scrape node-exporter on
+                {{ $labels.instance }} for 3 minutes: node down, pod
+                crashed, or a Tailscale route flap. Check the mesh first
+                (most common):
+
+                  tailscale ping {{ $labels.instance }}
+
+          # Non-node-exporter jobs (kube-state-metrics, cadvisor, GPU and
+          # Windows exporters, private overlay jobs) previously had NO
+          # down-target alert — kube-state-metrics was down for weeks
+          # unnoticed. This catches every remaining job.
+          - alert: TargetDown
+            expr: up{job!~"node-.*"} == 0
+            for: 5m
+            labels:
+              severity: warning
+              team: infrastructure
+            annotations:
+              summary: "Scrape target down: {{ $labels.job }} ({{ $labels.instance }})"
+              description: |
+                Prometheus cannot scrape {{ $labels.job }}
+                ({{ $labels.instance }}) — the job has been down 5 minutes.
+
+      - name: alerting-path
+        rules:
+          # Watches the notification path itself. If Alertmanager is
+          # unreachable this alert cannot page anyone either — that is
+          # inherent (a dead path cannot report its own death). Its value
+          # is on the Grafana alert list and the platform-health
+          # dashboard, which is where 6 weeks of silent delivery failure
+          # would have been visible in minutes.
+          - alert: NotificationDeliveryBroken
+            expr: increase(prometheus_notifications_errors_total[10m]) > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Prometheus cannot deliver notifications to Alertmanager"
+              description: |
+                Notification sends to Alertmanager are erroring
+                ({{ $value | printf "%.0f" }} in the last 10m). Every
+                alert — Discord and ServiceNow — is being dropped.
+                Verify Alertmanager is up on this node and reachable at
+                the address in prometheus.yml's alerting block.
 
 ---
 # =============================================================================
@@ -247,12 +386,26 @@ spec:
             - name: config
               mountPath: /etc/prometheus/rules/alerts.yml
               subPath: alerts.yml
+            # Private overlays — empty directories unless the optional
+            # ConfigMaps exist (they are managed outside this repo).
+            - name: private-scrape
+              mountPath: /etc/prometheus/scrape.d
+            - name: private-rules
+              mountPath: /etc/prometheus/rules-private
             - name: data
               mountPath: /prometheus
       volumes:
         - name: config
           configMap:
             name: prometheus-config
+        - name: private-scrape
+          configMap:
+            name: prometheus-private-scrape
+            optional: true
+        - name: private-rules
+          configMap:
+            name: prometheus-private-rules
+            optional: true
         - name: data
           persistentVolumeClaim:
             claimName: prometheus-data
@@ -324,8 +477,6 @@ spec:
           ports:
             - containerPort: 3000
           env:
-            - name: GF_SERVER_ROOT_URL
-              value: "https://your-domain.example.com/grafana/"
             - name: GF_SERVER_SERVE_FROM_SUB_PATH
               value: "true"
             - name: GF_SECURITY_ADMIN_PASSWORD
@@ -333,6 +484,17 @@ spec:
                 secretKeyRef:
                   name: grafana-admin
                   key: admin-password
+          # GF_SERVER_ROOT_URL (the real public URL) comes from the
+          # out-of-band 'grafana-env' ConfigMap, like the admin password
+          # comes from a Secret. A placeholder value here once shipped to
+          # production verbatim — committed manifests must never carry
+          # values that need post-apply editing.
+          #   kubectl -n monitoring create configmap grafana-env \
+          #     --from-literal=GF_SERVER_ROOT_URL=https://<your-domain>/grafana/
+          envFrom:
+            - configMapRef:
+                name: grafana-env
+                optional: true
           resources:
             requests:
               cpu: 50m
