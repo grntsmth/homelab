@@ -137,6 +137,14 @@ data:
         static_configs:
           - targets: ['100.92.211.3:9101']
 
+      # Chronicle app metrics (sync freshness, LLM latency/outcomes, webhook
+      # deliveries, agent runs, upcoming-event/conflict gauges). NodePort on
+      # the node hosting the pod, same pattern as kube-state-metrics.
+      - job_name: 'chronicle'
+        metrics_path: /chronicle/metrics
+        static_configs:
+          - targets: ['100.92.211.3:30890']
+
       # Synthetic HTTP probes via blackbox-exporter (below, hostNetwork on
       # this node). Targets here are the NodePort health endpoints already
       # documented in this repo; probes against the public domain live in
@@ -359,6 +367,26 @@ data:
                 {{ $labels.instance }} has burned error budget at >=6x for
                 6 hours. Not urgent, but the 30d budget disappears in
                 ~5 days at this rate.
+
+      - name: ecosystem-chronicle
+        rules:
+          # The blackbox probe catches Chronicle being down; this catches it
+          # being up but quietly broken — an expired OAuth refresh token
+          # presents exactly this way (sync interval is 10m, so >1h without
+          # a success means every retry since has failed).
+          - alert: ChronicleSyncStale
+            expr: time() - chronicle_sync_last_success_timestamp_seconds{job="chronicle"} > 3600
+            for: 10m
+            labels:
+              severity: warning
+              team: infrastructure
+            annotations:
+              summary: "Chronicle {{ $labels.source }} calendar sync is stale"
+              description: |
+                No successful {{ $labels.source }} sync for over an hour
+                (interval: 10m). Expired/revoked OAuth tokens look exactly
+                like this — check /chronicle/health and the pod logs, and
+                re-auth via /chronicle/oauth/{{ $labels.source }} if needed.
 
       - name: alerting-path
         rules:
